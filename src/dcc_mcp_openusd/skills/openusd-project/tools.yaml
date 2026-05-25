@@ -1,0 +1,65 @@
+tools:
+  - name: create_project
+    description: Create a portable OpenUSD project folder with scene.usda and standard asset subfolders.
+    input_schema:
+      type: object
+      required: [project_dir]
+      properties:
+        project_dir:
+          type: string
+          description: Destination project directory.
+        name:
+          type: string
+          description: Optional display name. Defaults to the folder name.
+        up_axis:
+          type: string
+          enum: [X, Y, Z]
+          default: Y
+          description: Stage up axis.
+        meters_per_unit:
+          type: number
+          default: 1.0
+          description: Stage metersPerUnit metadata.
+    read_only: false
+    destructive: false
+    idempotent: true
+    execution: sync
+    timeout_hint_secs: 30
+    source_file: scripts/create_project.py
+    annotations:
+      read_only_hint: false
+      destructive_hint: false
+      idempotent_hint: true
+    next-tools:
+      on-success:
+        - openusd_stage__list_stage
+        - openusd_validate__validate_stage
+
+  - name: snapshot_stage
+    description: Copy a stage into a snapshots directory for review or handoff.
+    input_schema:
+      type: object
+      required: [stage_file, output_dir]
+      properties:
+        stage_file:
+          type: string
+          description: Stage file to snapshot.
+        output_dir:
+          type: string
+          description: Snapshot directory.
+        name:
+          type: string
+          description: Optional snapshot name without extension.
+    read_only: false
+    destructive: false
+    idempotent: false
+    execution: sync
+    timeout_hint_secs: 30
+    source_file: scripts/snapshot_stage.py
+    annotations:
+      read_only_hint: false
+      destructive_hint: false
+      idempotent_hint: false
+    next-tools:
+      on-success:
+        - openusd_validate__validate_stage

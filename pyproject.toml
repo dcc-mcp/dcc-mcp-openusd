@@ -1,0 +1,102 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "dcc-mcp-openusd"
+version = "0.0.0"
+description = "OpenUSD adapter and skills for the DCC Model Context Protocol ecosystem"
+authors = [{ name = "Long Hao", email = "hal.long@outlook.com" }]
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.9"
+keywords = ["openusd", "usd", "mcp", "dcc", "ai", "llm", "model-context-protocol"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Multimedia :: Graphics :: 3D Modeling",
+    "Topic :: Multimedia :: Graphics :: 3D Rendering",
+]
+
+dependencies = [
+    "dcc-mcp-core>=0.17.26,<1.0.0",
+]
+
+[project.optional-dependencies]
+openusd = [
+    "usd-core>=24.11,<27",
+]
+dev = [
+    "build",
+    "pytest>=7.0",
+    "ruff>=0.8.0",
+    "twine",
+    "pyyaml>=6.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/loonghao/dcc-mcp-openusd"
+Repository = "https://github.com/loonghao/dcc-mcp-openusd"
+Issues = "https://github.com/loonghao/dcc-mcp-openusd/issues"
+Changelog = "https://github.com/loonghao/dcc-mcp-openusd/releases"
+
+[project.scripts]
+dcc-mcp-openusd = "dcc_mcp_openusd.cli:main"
+
+[project.entry-points."dcc_mcp.adapters"]
+openusd = "dcc_mcp_openusd:OpenUsdMcpServer"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/dcc_mcp_openusd"]
+artifacts = [
+    "src/dcc_mcp_openusd/skills/**",
+]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "src/dcc_mcp_openusd",
+    "tests",
+    "tools",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE",
+    "justfile",
+    "release-please-config.json",
+    ".release-please-manifest.json",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short"
+
+[tool.ruff]
+line-length = 120
+target-version = "py39"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W", "B", "C4"]
+ignore = [
+    "E501",
+    "B008",
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["dcc_mcp_openusd"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S101"]
+"src/dcc_mcp_openusd/skills/**/scripts/*.py" = ["E402"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"

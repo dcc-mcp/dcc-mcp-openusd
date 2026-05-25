@@ -1,0 +1,116 @@
+tools:
+  - name: create_stage
+    description: Create a minimal OpenUSD stage with /World as defaultPrim.
+    input_schema:
+      type: object
+      required: [stage_file]
+      properties:
+        stage_file:
+          type: string
+          description: Output .usda/.usd stage path.
+        name:
+          type: string
+          default: scene
+          description: Stage display name.
+        up_axis:
+          type: string
+          enum: [X, Y, Z]
+          default: Y
+        meters_per_unit:
+          type: number
+          default: 1.0
+    read_only: false
+    destructive: false
+    idempotent: true
+    execution: sync
+    timeout_hint_secs: 30
+    source_file: scripts/create_stage.py
+    annotations:
+      read_only_hint: false
+      destructive_hint: false
+      idempotent_hint: true
+    next-tools:
+      on-success:
+        - openusd_stage__list_stage
+        - openusd_validate__validate_stage
+
+  - name: list_stage
+    description: List prims and basic metadata for an OpenUSD stage.
+    input_schema:
+      type: object
+      required: [stage_file]
+      properties:
+        stage_file:
+          type: string
+          description: Stage file to inspect.
+    read_only: true
+    destructive: false
+    idempotent: true
+    execution: sync
+    timeout_hint_secs: 30
+    source_file: scripts/list_stage.py
+    annotations:
+      read_only_hint: true
+      destructive_hint: false
+      idempotent_hint: true
+
+  - name: define_xform
+    description: Define an Xform prim in the stage.
+    input_schema:
+      type: object
+      required: [stage_file, prim_path]
+      properties:
+        stage_file:
+          type: string
+          description: Stage file to mutate.
+        prim_path:
+          type: string
+          description: Absolute prim path, for example /World/Chair.
+    read_only: false
+    destructive: false
+    idempotent: true
+    execution: sync
+    timeout_hint_secs: 30
+    source_file: scripts/define_xform.py
+    annotations:
+      read_only_hint: false
+      destructive_hint: false
+      idempotent_hint: true
+    next-tools:
+      on-success:
+        - openusd_stage__list_stage
+        - openusd_validate__validate_stage
+
+  - name: add_reference
+    description: Define a prim and add a reference arc to an external USD asset.
+    input_schema:
+      type: object
+      required: [stage_file, prim_path, asset_path]
+      properties:
+        stage_file:
+          type: string
+          description: Stage file to mutate.
+        prim_path:
+          type: string
+          description: Absolute prim path to define.
+        asset_path:
+          type: string
+          description: Referenced asset path.
+        prim_type:
+          type: string
+          default: Xform
+          description: USD prim type to define for the reference.
+    read_only: false
+    destructive: false
+    idempotent: false
+    execution: sync
+    timeout_hint_secs: 30
+    source_file: scripts/add_reference.py
+    annotations:
+      read_only_hint: false
+      destructive_hint: false
+      idempotent_hint: false
+    next-tools:
+      on-success:
+        - openusd_stage__list_stage
+        - openusd_validate__validate_stage
