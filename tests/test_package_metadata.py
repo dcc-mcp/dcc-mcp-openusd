@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import dcc_mcp_openusd
@@ -8,10 +9,15 @@ import dcc_mcp_openusd
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_version_baseline_for_release_please():
+def test_release_metadata_is_synchronized():
     manifest = json.loads(ROOT.joinpath(".release-please-manifest.json").read_text(encoding="utf-8"))
-    assert manifest["."] == "0.0.0"
-    assert dcc_mcp_openusd.__version__ == "0.0.0"
+    pyproject = ROOT.joinpath("pyproject.toml").read_text(encoding="utf-8")
+    pyproject_version = re.search(r'(?m)^version = "([^"]+)"$', pyproject)
+
+    assert re.fullmatch(r"\d+\.\d+\.\d+", dcc_mcp_openusd.__version__)
+    assert pyproject_version is not None
+    assert pyproject_version.group(1) == dcc_mcp_openusd.__version__
+    assert manifest["."] == dcc_mcp_openusd.__version__
 
 
 def test_bundled_skill_files_exist():
