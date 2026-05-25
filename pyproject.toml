@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "dcc-mcp-openusd"
-version = "0.0.0"
+version = "0.1.0"
 description = "OpenUSD adapter and skills for the DCC Model Context Protocol ecosystem"
 authors = [{ name = "Long Hao", email = "hal.long@outlook.com" }]
 readme = "README.md"
