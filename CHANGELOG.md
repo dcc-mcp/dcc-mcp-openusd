@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.1](https://github.com/dcc-mcp/dcc-mcp-openusd/compare/v0.1.0...v0.1.1) (2026-06-05)
+
+
+### Bug Fixes
+
+* **deps:** document core 0.18.2 floor ([187d49a](https://github.com/dcc-mcp/dcc-mcp-openusd/commit/187d49a184c3a269c9bae264c8e32694bcbd48c8))
+
 ## 0.1.0 (2026-05-25)
 
 
