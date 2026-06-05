@@ -13,6 +13,8 @@ stages, and package USDZ-like archives. It is designed to plug into the
 pip install dcc-mcp-openusd
 ```
 
+This release train requires `dcc-mcp-core>=0.18.2`.
+
 For full OpenUSD runtime behavior, install the optional Pixar USD bindings:
 
 ```bash
