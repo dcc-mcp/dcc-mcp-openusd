@@ -4,7 +4,7 @@ description: >-
   Infrastructure skill for validating OpenUSD stage invariants and packaging a
   stage into a USDZ-style archive. Use after authoring or before handoff.
 license: MIT
-compatibility: "Python 3.9+; dcc-mcp-core 0.17+; optional usd-core for full OpenUSD runtime"
+compatibility: "Python 3.9+; dcc-mcp-core 0.18.2+; optional usd-core for full OpenUSD runtime"
 allowed-tools: Bash Read Write
 metadata:
   dcc-mcp:

@@ -5,7 +5,7 @@ description: >-
   folders with scene.usda, assets, materials, lights, packages, and snapshots.
   Use before authoring a new OpenUSD stage or when resuming a portable project.
 license: MIT
-compatibility: "Python 3.9+; dcc-mcp-core 0.17+; optional usd-core for full OpenUSD runtime"
+compatibility: "Python 3.9+; dcc-mcp-core 0.18.2+; optional usd-core for full OpenUSD runtime"
 allowed-tools: Bash Read Write
 metadata:
   dcc-mcp:
