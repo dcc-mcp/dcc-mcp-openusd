@@ -309,3 +309,120 @@ def test_set_xform_ops_none_present_raises(tmp_path):
         pass
     else:
         raise AssertionError("Expected OpenUsdError for missing prim")
+
+
+# ── text-fallback regression tests ──
+# These force has_pxr=False so they exercise the text-fallback path
+# regardless of whether pxr is installed.
+
+
+def _force_text_fallback(monkeypatch):
+    """Force detect_runtime() to report has_pxr=False."""
+    from dcc_mcp_openusd.runtime import RuntimeInfo
+
+    monkeypatch.setattr("dcc_mcp_openusd.runtime._RUNTIME_INFO", RuntimeInfo(has_pxr=False))
+
+
+def test_set_stage_metadata_meters_per_unit_regex_fix(tmp_path, monkeypatch):
+    """meters_per_unit=0.01 must not trigger re.error in text-fallback mode."""
+    _force_text_fallback(monkeypatch)
+    stage_file = tmp_path / "scene.usda"
+    create_stage(str(stage_file), name="regex-fix")
+
+    # This used to raise: re.error: invalid group reference 10 at position 1
+    result = set_stage_metadata(str(stage_file), meters_per_unit=0.01)
+    assert result["runtime"] == "text-fallback"
+
+    content = stage_file.read_text(encoding="utf-8")
+    assert "metersPerUnit = 0.01" in content
+
+
+def test_set_stage_metadata_up_axis_regex_fix(tmp_path, monkeypatch):
+    """up_axis change must also work safely in text-fallback."""
+    _force_text_fallback(monkeypatch)
+    stage_file = tmp_path / "scene.usda"
+    create_stage(str(stage_file), name="up-axis-fix", up_axis="Y")
+
+    result = set_stage_metadata(str(stage_file), up_axis="Z")
+    assert result["runtime"] == "text-fallback"
+    assert 'upAxis = "Z"' in stage_file.read_text(encoding="utf-8")
+
+
+def test_define_prim_correct_parent_duplicate_names(tmp_path, monkeypatch):
+    """define_prim must find the correct parent when duplicate leaf names exist."""
+    _force_text_fallback(monkeypatch)
+    stage_file = tmp_path / "scene.usda"
+    create_stage(str(stage_file), name="dup-names")
+
+    # Create /World/SideA/Chair and /World/SideB/Chair
+    define_prim(str(stage_file), "/World/SideA/Chair", "Xform")
+    define_prim(str(stage_file), "/World/SideB/Chair", "Xform")
+
+    # Now insert /World/SideA/Chair/LegA — must go under SideA, not SideB
+    result = define_prim(str(stage_file), "/World/SideA/Chair/LegA", "Xform")
+    assert result["created"] is True
+
+    content = stage_file.read_text(encoding="utf-8")
+    prims = _parse_prims_from_usda(content)
+    paths = {p["path"] for p in prims}
+    assert "/World/SideA/Chair/LegA" in paths
+    assert "/World/SideB/Chair/LegA" not in paths
+
+
+def test_set_xform_ops_correct_prim_duplicate_names(tmp_path, monkeypatch):
+    """set_xform_ops must target the correct prim when duplicate leaf names exist."""
+    _force_text_fallback(monkeypatch)
+    stage_file = tmp_path / "scene.usda"
+    create_stage(str(stage_file), name="xform-dup")
+
+    define_prim(str(stage_file), "/World/A/Box", "Xform")
+    define_prim(str(stage_file), "/World/B/Box", "Xform")
+
+    # Set translate on /World/B/Box — must not touch /World/A/Box
+    set_xform_ops(str(stage_file), "/World/B/Box", translate=[5.0, 0.0, 0.0])
+
+    content = stage_file.read_text(encoding="utf-8")
+    a_idx = content.index('"A"')
+    b_idx = content.index('"B"')
+    translate_idx = content.index("xformOp:translate")
+    # The translate must appear after B's block start, not A's
+    assert translate_idx > b_idx
+
+
+def test_set_xform_ops_only_includes_passed_ops(tmp_path, monkeypatch):
+    """xformOpOrder must only list ops that were actually passed, not all three."""
+    _force_text_fallback(monkeypatch)
+    stage_file = tmp_path / "scene.usda"
+    create_stage(str(stage_file), name="xform-order")
+
+    define_prim(str(stage_file), "/World/Cube", "Xform")
+    # Only pass translate — xformOpOrder must mention only translate
+    set_xform_ops(str(stage_file), "/World/Cube", translate=[1.0, 2.0, 3.0])
+
+    content = stage_file.read_text(encoding="utf-8")
+    assert "xformOp:translate" in content
+    assert "xformOp:rotateXYZ" not in content
+    assert "xformOp:scale" not in content
+    assert '"xformOp:translate"' in content
+    # xformOpOrder must not list rotate or scale
+    order_line = [l for l in content.splitlines() if "xformOpOrder" in l][0]
+    assert "rotate" not in order_line
+    assert "scale" not in order_line
+
+
+def test_set_xform_ops_correct_indentation(tmp_path, monkeypatch):
+    """xformOp attributes must be indented correctly relative to the prim."""
+    _force_text_fallback(monkeypatch)
+    stage_file = tmp_path / "scene.usda"
+    create_stage(str(stage_file), name="indent")
+
+    define_prim(str(stage_file), "/World/Parent/Child", "Xform")
+    set_xform_ops(str(stage_file), "/World/Parent/Child", translate=[1.0, 0.0, 0.0])
+
+    content = stage_file.read_text(encoding="utf-8")
+    # Child is at depth 2 → xformOp lines must be indented 12 spaces (3 levels)
+    for line in content.splitlines():
+        if "xformOp:translate" in line:
+            assert line.startswith("            "), f"Wrong indent: {line!r}"
+        if "xformOpOrder" in line:
+            assert line.startswith("            "), f"Wrong indent: {line!r}"

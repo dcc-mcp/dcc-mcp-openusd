@@ -259,34 +259,37 @@ def set_xform_ops(
 
     # text-fallback: add xformOp attributes to the prim block
     text = path.read_text(encoding="utf-8")
-    prim_name = prim_path.rstrip("/").split("/")[-1]
     existing_prims = _parse_prims_from_usda(text)
     if prim_path not in {p["path"] for p in existing_prims}:
         raise OpenUsdError(f"Prim not found: {prim_path}")
 
-    # Insert xformOp attributes into the prim's block
-    xform_lines = ['        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]']
+    brace_pos = _find_prim_opening_brace(text, prim_path)
+    if brace_pos is None:
+        raise OpenUsdError(f"Prim not found: {prim_path}")
+
+    parts_count = len(prim_path.strip("/").split("/"))
+    indent = "    " * parts_count
+
+    op_names = []
+    xform_lines: List[str] = []
     if translate is not None:
+        op_names.append('"xformOp:translate"')
         xform_lines.append(
-            f"        double3 xformOp:translate = ({translate[0]:g}, {translate[1]:g}, {translate[2]:g})"
+            f"{indent}double3 xformOp:translate = ({translate[0]:g}, {translate[1]:g}, {translate[2]:g})"
         )
     if rotate is not None:
-        xform_lines.append(f"        float3 xformOp:rotateXYZ = ({rotate[0]:g}, {rotate[1]:g}, {rotate[2]:g})")
+        op_names.append('"xformOp:rotateXYZ"')
+        xform_lines.append(f"{indent}float3 xformOp:rotateXYZ = ({rotate[0]:g}, {rotate[1]:g}, {rotate[2]:g})")
     if scale is not None:
-        xform_lines.append(f"        float3 xformOp:scale = ({scale[0]:g}, {scale[1]:g}, {scale[2]:g})")
+        op_names.append('"xformOp:scale"')
+        xform_lines.append(f"{indent}float3 xformOp:scale = ({scale[0]:g}, {scale[1]:g}, {scale[2]:g})")
 
-    # Find the prim block and insert xformOps
-    prim_def_pattern = rf'def\s+\S+\s+"{re.escape(prim_name)}"'
-    match = re.search(prim_def_pattern, text)
-    if match:
-        # Find the opening brace of this prim
-        pos = match.end()
-        while pos < len(text) and text[pos] != "{":
-            pos += 1
-        if pos < len(text) and text[pos] == "{":
-            insert_pos = pos + 1
-            new_text = text[:insert_pos] + "\n" + "\n".join(xform_lines) + "\n" + text[insert_pos:]
-            path.write_text(new_text, encoding="utf-8")
+    if op_names:
+        xform_lines.insert(0, f"{indent}uniform token[] xformOpOrder = [{', '.join(op_names)}]")
+
+    if xform_lines:
+        new_text = text[:brace_pos] + "\n" + "\n".join(xform_lines) + "\n" + text[brace_pos:]
+        path.write_text(new_text, encoding="utf-8")
 
     return {"stage_file": str(path), "prim_path": prim_path, "runtime": "text-fallback"}
 
@@ -336,7 +339,7 @@ def set_stage_metadata(
     def _set_meta(key: str, value_str: str) -> str:
         nonlocal inner
         if re.search(rf"^\s*{re.escape(key)}\s*=", inner, re.MULTILINE):
-            inner = re.sub(rf"^(\s*{re.escape(key)}\s*=\s*).*$", rf"\1{value_str}", inner, flags=re.MULTILINE)
+            inner = re.sub(rf"^(\s*{re.escape(key)}\s*=\s*).*$", rf"\g<1>{value_str}", inner, flags=re.MULTILINE)
         else:
             inner = inner.rstrip() + f"\n    {key} = {value_str}\n"
         return inner
@@ -437,6 +440,31 @@ def package_usdz(stage_file: str, output_file: str) -> Dict[str, Any]:
 # ── internal helpers ──
 
 
+def _find_prim_opening_brace(text: str, prim_path: str) -> int | None:
+    """Find the character position right after the opening brace of a prim by its full USDA path.
+
+    Returns ``None`` when the prim is not found.
+    """
+    path_parts = [p for p in prim_path.strip("/").split("/") if p]
+    if not path_parts:
+        return None
+
+    path_stack: List[str] = []
+    for m in re.finditer(r'\b(?:def|over|class)\s+([A-Za-z_][A-Za-z0-9_]*)\s+"([^"]+)"', text):
+        name = m.group(2)
+        brace_depth = text[: m.start()].count("{") - text[: m.start()].count("}")
+        while len(path_stack) > brace_depth:
+            path_stack.pop()
+        path_stack.append(name)
+        if path_stack == path_parts:
+            pos = m.end()
+            while pos < len(text) and text[pos] != "{":
+                pos += 1
+            return pos + 1 if pos < len(text) else None
+
+    return None
+
+
 def _minimal_usda(name: str, up_axis: str, meters_per_unit: float) -> str:
     safe_name = _safe_name(name)
     return (
@@ -492,36 +520,28 @@ def _insert_into_usda(text: str, prim_path: str, prim_type: str, reference: Opti
 
     if existing_parent:
         # Insert inside the existing parent
-        parent_name = existing_parent.rstrip("/").split("/")[-1]
-        remaining = parts[parts.index(parent_name) + 1 :]
+        parent_parts = existing_parent.strip("/").split("/")
+        remaining = parts[len(parent_parts) :]
         if not remaining:
             return text  # Already exists
         block = _build_nested_block(remaining, prim_type, reference)
-        return _insert_after_opening_brace(text, parent_name, block)
+        return _insert_after_opening_brace(text, existing_parent, block)
     else:
         # No parent exists — append full nested block at end
         block = _build_nested_block(parts, prim_type, reference)
         return text.rstrip() + "\n\n" + block + "\n"
 
 
-def _insert_after_opening_brace(text: str, prim_name: str, block: str) -> str:
-    """Insert USDA block after the opening brace of a named prim."""
-    pattern = rf'def\s+\S+\s+"{re.escape(prim_name)}"'
-    match = re.search(pattern, text)
-    if not match:
+def _insert_after_opening_brace(text: str, parent_path: str, block: str) -> str:
+    """Insert USDA block after the opening brace of the prim identified by *parent_path*."""
+    brace_pos = _find_prim_opening_brace(text, parent_path)
+    if brace_pos is None:
         return text.rstrip() + "\n\n" + block + "\n"
 
-    # Find the opening brace after the def line
-    pos = match.end()
-    while pos < len(text) and text[pos] not in ("{", "\n"):
-        pos += 1
-    if pos >= len(text) or text[pos] != "{":
-        pos = text.index("{", match.start())
-    insert_pos = pos + 1
-
-    # Indent the block
-    indented = "\n".join("    " + line for line in block.splitlines())
-    return text[:insert_pos] + "\n" + indented + "\n" + text[insert_pos:]
+    parts_count = len(parent_path.strip("/").split("/"))
+    indent = "    " * parts_count
+    indented = "\n".join(indent + line for line in block.splitlines())
+    return text[:brace_pos] + "\n" + indented + "\n" + text[brace_pos:]
 
 
 def _parse_prims_from_usda(text: str) -> List[Dict[str, Any]]:
