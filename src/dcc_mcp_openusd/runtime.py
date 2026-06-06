@@ -482,17 +482,21 @@ def _minimal_usda(name: str, up_axis: str, meters_per_unit: float) -> str:
 
 
 def _build_nested_block(parts: List[str], prim_type: str, reference: Optional[str] = None) -> str:
-    """Build a nested USDA def block from path segments."""
+    """Build a nested USDA def block from path segments.
+
+    Intermediate ancestors always use ``Xform``; only the leaf receives *prim_type*.
+    """
     lines: List[str] = []
     for i, part in enumerate(parts):
         indent = "    " * i
         is_leaf = i == len(parts) - 1
+        node_type = prim_type if is_leaf else "Xform"
         if is_leaf and reference:
-            lines.append(f'{indent}def {prim_type} "{part}" (')
+            lines.append(f'{indent}def {node_type} "{part}" (')
             lines.append(f"{indent}    prepend references = @{reference}@")
             lines.append(f"{indent})")
         else:
-            lines.append(f'{indent}def {prim_type} "{part}"')
+            lines.append(f'{indent}def {node_type} "{part}"')
         lines.append(f"{indent}{{")
 
     for i in range(len(parts) - 1, -1, -1):

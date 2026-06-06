@@ -425,3 +425,34 @@ def test_set_xform_ops_correct_indentation(tmp_path, monkeypatch):
             assert line.startswith("            "), f"Wrong indent: {line!r}"
         if "xformOpOrder" in line:
             assert line.startswith("            "), f"Wrong indent: {line!r}"
+
+
+def test_build_nested_block_uses_xform_for_ancestors(tmp_path, monkeypatch):
+    """Intermediate nodes must be Xform, only the leaf gets the requested type."""
+    _force_text_fallback(monkeypatch)
+    stage_file = tmp_path / "scene.usda"
+    create_stage(str(stage_file), name="types")
+
+    # No existing parent — full path is built by _build_nested_block
+    define_prim(str(stage_file), "/Foo/Bar", "SphereLight")
+
+    content = stage_file.read_text(encoding="utf-8")
+    prims = _parse_prims_from_usda(content)
+    types = {p["path"]: p["type"] for p in prims}
+    assert types.get("/Foo") == "Xform", f"/Foo should be Xform, got {types.get('/Foo')}"
+    assert types.get("/Foo/Bar") == "SphereLight", f"/Foo/Bar should be SphereLight, got {types.get('/Foo/Bar')}"
+
+
+def test_add_reference_ancestors_xform(tmp_path, monkeypatch):
+    """add_reference with non-Xform type must still make ancestors Xform."""
+    _force_text_fallback(monkeypatch)
+    stage_file = tmp_path / "scene.usda"
+    create_stage(str(stage_file), name="ref-types")
+
+    add_reference(str(stage_file), "/World/Props/Mesh", "assets/mesh.usd", prim_type="Mesh")
+
+    content = stage_file.read_text(encoding="utf-8")
+    prims = _parse_prims_from_usda(content)
+    types = {p["path"]: p["type"] for p in prims}
+    assert types.get("/World/Props") == "Xform", f"/World/Props should be Xform, got {types.get('/World/Props')}"
+    assert types.get("/World/Props/Mesh") == "Mesh"
