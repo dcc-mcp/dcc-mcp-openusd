@@ -124,8 +124,14 @@ def _setup_logging(debug: bool) -> None:
 
 
 def _build_server(args: argparse.Namespace) -> OpenUsdMcpServer:
-    """Construct an OpenUsdMcpServer from parsed CLI args + env."""
-    port = args.port or int(os.environ.get("DCC_MCP_OPENUSD_PORT", DEFAULT_PORT))
+    """Construct an OpenUsdMcpServer from parsed CLI args + env.
+
+    ``--port 0`` is preserved so core can let the OS assign a free port.
+    """
+    port = args.port
+    if port is None:
+        env_port = os.environ.get("DCC_MCP_OPENUSD_PORT")
+        port = int(env_port) if env_port else DEFAULT_PORT
 
     # Gateway failover: CLI flag wins, then env var, then server default
     enable_gateway_failover = args.enable_gateway_failover
@@ -201,9 +207,20 @@ _signal_received: bool = False
 
 
 def _handle_signal(signum: int, _frame: object) -> None:
+    """Set the shutdown flag and tear down the server immediately.
+
+    Does **not** call ``sys.exit`` — the main loop polls ``_signal_received``
+    and exits cleanly through ``stop_server()`` in the ``finally`` block.
+    The inline ``stop_server()`` here shortens the window before the next
+    ``time.sleep(1)`` poll iteration.
+    """
     global _signal_received
     _signal_received = True
     logger.info("Received signal %d, shutting down...", signum)
+    try:
+        stop_server()
+    except Exception:
+        pass
 
 
 def _wait_for_shutdown(server: OpenUsdMcpServer) -> None:
