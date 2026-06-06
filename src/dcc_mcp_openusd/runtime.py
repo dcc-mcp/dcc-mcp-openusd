@@ -240,7 +240,7 @@ def set_xform_ops(
 
     if detect_runtime().has_pxr:
         try:
-            from pxr import Usd, UsdGeom, Gf  # type: ignore
+            from pxr import Gf, Usd, UsdGeom  # type: ignore
 
             stage = Usd.Stage.Open(str(path))
             if stage is None:
