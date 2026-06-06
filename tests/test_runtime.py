@@ -3,12 +3,21 @@ from __future__ import annotations
 import zipfile
 
 from dcc_mcp_openusd.runtime import (
+    OpenUsdError,
+    _build_nested_block,
+    _insert_into_usda,
+    _parse_prims_from_usda,
     add_reference,
     create_project,
     create_stage,
+    define_prim,
     define_xform,
+    detect_runtime,
     list_stage,
     package_usdz,
+    require_pxr,
+    set_stage_metadata,
+    set_xform_ops,
     snapshot_stage,
     validate_stage,
 )
@@ -22,6 +31,7 @@ def test_create_project_creates_portable_layout(tmp_path):
     assert project_dir.joinpath("scene.usda").exists()
     assert project_dir.joinpath("assets").is_dir()
     assert project["metadata"]["up_axis"] == "Z"
+    assert "runtime" in project
 
 
 def test_stage_authoring_roundtrip(tmp_path):
@@ -35,6 +45,146 @@ def test_stage_authoring_roundtrip(tmp_path):
     assert listing["prim_count"] >= 3
     assert any(prim["path"].endswith("Chair") for prim in listing["prims"])
     assert "assets/table.usda" in stage_file.read_text(encoding="utf-8")
+    assert "runtime" in listing
+
+
+def test_hierarchy_preserved_text_fallback(tmp_path):
+    """define_xform('/World/Chair/LegA') must retain the full path, not collapse to /LegA."""
+    stage_file = tmp_path / "scene.usda"
+    create_stage(str(stage_file), name="hierarchy")
+
+    result = define_xform(str(stage_file), "/World/Chair/LegA")
+    assert result["created"] is True
+    assert result["runtime"] in ("pxr", "text-fallback")
+
+    listing = list_stage(str(stage_file))
+    paths = {p["path"] for p in listing["prims"]}
+    assert "/World" in paths
+    assert "/World/Chair" in paths
+    assert "/World/Chair/LegA" in paths
+    # The old bug would produce /LegA (flat, without hierarchy)
+    assert "/LegA" not in paths
+
+
+def test_define_prim_arbitrary_type(tmp_path):
+    stage_file = tmp_path / "scene.usda"
+    create_stage(str(stage_file), name="types")
+
+    result = define_prim(str(stage_file), "/World/Light", "SphereLight")
+    assert result["created"] is True
+    assert "runtime" in result
+
+    listing = list_stage(str(stage_file))
+    light_prim = next((p for p in listing["prims"] if p["path"] == "/World/Light"), None)
+    assert light_prim is not None
+    assert light_prim["type"] == "SphereLight"
+
+
+def test_define_prim_idempotent(tmp_path):
+    stage_file = tmp_path / "scene.usda"
+    create_stage(str(stage_file), name="idem")
+
+    first = define_prim(str(stage_file), "/World/Hero", "Mesh")
+    assert first["created"] is True
+
+    second = define_prim(str(stage_file), "/World/Hero", "Mesh")
+    assert second["created"] is False
+
+
+def test_set_xform_ops_text_fallback(tmp_path):
+    stage_file = tmp_path / "scene.usda"
+    create_stage(str(stage_file), name="xform")
+
+    define_xform(str(stage_file), "/World/Cube")
+    result = set_xform_ops(
+        str(stage_file),
+        "/World/Cube",
+        translate=[1.0, 2.0, 3.0],
+        rotate=[0.0, 90.0, 0.0],
+        scale=[2.0, 2.0, 2.0],
+    )
+    assert result["runtime"] in ("pxr", "text-fallback")
+
+    content = stage_file.read_text(encoding="utf-8")
+    assert "xformOp:translate" in content
+    assert "xformOp:rotateXYZ" in content
+    assert "xformOp:scale" in content
+    assert "xformOpOrder" in content
+
+
+def test_set_xform_ops_prim_not_found_raises(tmp_path):
+    stage_file = tmp_path / "scene.usda"
+    create_stage(str(stage_file), name="xform")
+
+    try:
+        set_xform_ops(str(stage_file), "/World/Missing", translate=[1, 0, 0])
+    except OpenUsdError as exc:
+        assert "Prim not found" in str(exc)
+    else:
+        raise AssertionError("Expected OpenUsdError")
+
+
+def test_set_stage_metadata_text_fallback(tmp_path):
+    stage_file = tmp_path / "scene.usda"
+    create_stage(str(stage_file), name="meta")
+
+    result = set_stage_metadata(
+        str(stage_file),
+        up_axis="Z",
+        meters_per_unit=0.01,
+        doc="Test stage for metadata",
+        frames_per_second=24.0,
+    )
+    assert result["runtime"] in ("pxr", "text-fallback")
+
+    content = stage_file.read_text(encoding="utf-8")
+    assert 'upAxis = "Z"' in content
+    assert "metersPerUnit = 0.01" in content
+    assert 'doc = "Test stage for metadata"' in content
+    assert "framesPerSecond = 24" in content
+
+
+def test_set_stage_metadata_partial_update(tmp_path):
+    stage_file = tmp_path / "scene.usda"
+    create_stage(str(stage_file), name="partial")
+
+    # Only change up_axis, leave others as-is
+    set_stage_metadata(str(stage_file), up_axis="X")
+
+    content = stage_file.read_text(encoding="utf-8")
+    assert 'upAxis = "X"' in content
+    # Original metersPerUnit should still be there
+    assert "metersPerUnit" in content
+
+
+def test_require_pxr_guard():
+    """require_pxr raises OpenUsdError when pxr is not available."""
+    if detect_runtime().has_pxr:
+        # pxr is available — guard should silently pass
+        require_pxr("test operation")
+    else:
+        try:
+            require_pxr("complex material authoring")
+        except OpenUsdError as exc:
+            assert "requires the Pixar USD (pxr) package" in str(exc)
+        else:
+            raise AssertionError("Expected OpenUsdError")
+
+
+def test_all_runtime_fields_present(tmp_path):
+    """Every public function must return a 'runtime' field."""
+    stage_file = tmp_path / "scene.usda"
+    create_stage(str(stage_file), name="runtime-check")
+
+    assert "runtime" in create_project(str(tmp_path / "proj"), name="test")
+    assert "runtime" in snapshot_stage(str(stage_file), str(tmp_path / "snaps"))
+    assert "runtime" in define_xform(str(stage_file), "/World/Test")
+    assert "runtime" in define_prim(str(stage_file), "/World/Test2", "Xform")
+    assert "runtime" in add_reference(str(stage_file), "/World/Ref", "assets/ref.usda")
+    assert "runtime" in set_stage_metadata(str(stage_file), up_axis="Y")
+    assert "runtime" in validate_stage(str(stage_file))
+    assert "runtime" in package_usdz(str(stage_file), str(tmp_path / "out.usdz"))
+    assert "runtime" in list_stage(str(stage_file))
 
 
 def test_validation_and_package(tmp_path):
@@ -44,10 +194,12 @@ def test_validation_and_package(tmp_path):
 
     validation = validate_stage(str(stage_file), strict=True)
     assert validation["valid"] is True
+    assert "runtime" in validation
 
     packaged = package_usdz(str(stage_file), str(package_file))
     assert package_file.exists()
     assert packaged["package_file"] == str(package_file.resolve())
+    assert "runtime" in packaged
     with zipfile.ZipFile(package_file) as zf:
         assert "scene.usda" in zf.namelist()
 
@@ -59,4 +211,278 @@ def test_snapshot_stage(tmp_path):
     result = snapshot_stage(str(stage_file), str(tmp_path / "snapshots"), name="review")
 
     assert result["snapshot_file"].endswith("review.usda")
+    assert "runtime" in result
     assert (tmp_path / "snapshots" / "review.usda").exists()
+
+
+# ── internal helper tests ──
+
+
+def test_parse_prims_tracks_nesting():
+    usda = (
+        "#usda 1.0\n"
+        "(\n"
+        '    defaultPrim = "World"\n'
+        ")\n\n"
+        'def Xform "World"\n'
+        "{\n"
+        '    def Xform "Chair"\n'
+        "    {\n"
+        '        def Xform "LegA"\n'
+        "        {\n"
+        "        }\n"
+        "    }\n"
+        "}\n"
+    )
+    prims = _parse_prims_from_usda(usda)
+    paths = {p["path"] for p in prims}
+    assert "/World" in paths
+    assert "/World/Chair" in paths
+    assert "/World/Chair/LegA" in paths
+    # Old parser would produce /LegA (flat)
+    assert "/LegA" not in paths
+
+
+def test_parse_prims_handles_single_line_brace():
+    usda = 'def Xform "World"\n{\n}\n'
+    prims = _parse_prims_from_usda(usda)
+    assert len(prims) == 1
+    assert prims[0]["path"] == "/World"
+
+
+def test_build_nested_block_single():
+    block = _build_nested_block(["Chair"], "Xform")
+    assert 'def Xform "Chair"' in block
+    assert block.count("def") == 1
+
+
+def test_build_nested_block_multi_level():
+    block = _build_nested_block(["World", "Chair", "LegA"], "Xform")
+    assert 'def Xform "World"' in block
+    assert 'def Xform "Chair"' in block
+    assert 'def Xform "LegA"' in block
+    assert block.count("def") == 3
+    # Check indentation
+    lines = block.splitlines()
+    assert lines[0] == 'def Xform "World"'
+    assert lines[2] == '    def Xform "Chair"'
+    assert lines[4] == '        def Xform "LegA"'
+
+
+def test_build_nested_block_with_reference():
+    block = _build_nested_block(["World", "Table"], "Xform", reference="assets/table.usda")
+    assert "references" in block
+    assert "@assets/table.usda@" in block
+    # Reference should only appear on the leaf (Table), not the root (World)
+    world_line = next(line for line in block.splitlines() if "World" in line)
+    assert "references" not in world_line
+
+
+def test_insert_into_usda_new_path(tmp_path):
+    """Insert a new prim path into USDA with an existing parent."""
+    usda_base = '#usda 1.0\n(\n    defaultPrim = "World"\n)\n\ndef Xform "World"\n{\n}\n'
+    result = _insert_into_usda(usda_base, "/World/Chair", "Xform")
+    prims = _parse_prims_from_usda(result)
+    paths = {p["path"] for p in prims}
+    assert "/World" in paths
+    assert "/World/Chair" in paths
+
+
+def test_insert_into_usda_no_parent(tmp_path):
+    """Insert a prim when no parent exists — full nested block appended."""
+    usda_base = '#usda 1.0\n(\n    defaultPrim = "World"\n)\n\ndef Xform "World"\n{\n}\n'
+    result = _insert_into_usda(usda_base, "/Foo/Bar", "Xform")
+    prims = _parse_prims_from_usda(result)
+    paths = {p["path"] for p in prims}
+    assert "/Foo" in paths
+    assert "/Foo/Bar" in paths
+
+
+def test_set_xform_ops_none_present_raises(tmp_path):
+    """set_xform_ops on missing prim must raise, not silently succeed."""
+    stage_file = tmp_path / "scene.usda"
+    create_stage(str(stage_file))
+
+    try:
+        set_xform_ops(str(stage_file), "/World/Nope", translate=[0, 0, 0])
+    except OpenUsdError:
+        pass
+    else:
+        raise AssertionError("Expected OpenUsdError for missing prim")
+
+
+# ── text-fallback regression tests ──
+# These force has_pxr=False so they exercise the text-fallback path
+# regardless of whether pxr is installed.
+
+
+def _force_text_fallback(monkeypatch):
+    """Force detect_runtime() to report has_pxr=False."""
+    from dcc_mcp_openusd.runtime import RuntimeInfo
+
+    monkeypatch.setattr("dcc_mcp_openusd.runtime._RUNTIME_INFO", RuntimeInfo(has_pxr=False))
+
+
+def test_set_stage_metadata_meters_per_unit_regex_fix(tmp_path, monkeypatch):
+    """meters_per_unit=0.01 must not trigger re.error in text-fallback mode."""
+    _force_text_fallback(monkeypatch)
+    stage_file = tmp_path / "scene.usda"
+    create_stage(str(stage_file), name="regex-fix")
+
+    # This used to raise: re.error: invalid group reference 10 at position 1
+    result = set_stage_metadata(str(stage_file), meters_per_unit=0.01)
+    assert result["runtime"] == "text-fallback"
+
+    content = stage_file.read_text(encoding="utf-8")
+    assert "metersPerUnit = 0.01" in content
+
+
+def test_set_stage_metadata_up_axis_regex_fix(tmp_path, monkeypatch):
+    """up_axis change must also work safely in text-fallback."""
+    _force_text_fallback(monkeypatch)
+    stage_file = tmp_path / "scene.usda"
+    create_stage(str(stage_file), name="up-axis-fix", up_axis="Y")
+
+    result = set_stage_metadata(str(stage_file), up_axis="Z")
+    assert result["runtime"] == "text-fallback"
+    assert 'upAxis = "Z"' in stage_file.read_text(encoding="utf-8")
+
+
+def test_define_prim_correct_parent_duplicate_names(tmp_path, monkeypatch):
+    """define_prim must find the correct parent when duplicate leaf names exist."""
+    _force_text_fallback(monkeypatch)
+    stage_file = tmp_path / "scene.usda"
+    create_stage(str(stage_file), name="dup-names")
+
+    # Create /World/SideA/Chair and /World/SideB/Chair
+    define_prim(str(stage_file), "/World/SideA/Chair", "Xform")
+    define_prim(str(stage_file), "/World/SideB/Chair", "Xform")
+
+    # Now insert /World/SideA/Chair/LegA — must go under SideA, not SideB
+    result = define_prim(str(stage_file), "/World/SideA/Chair/LegA", "Xform")
+    assert result["created"] is True
+
+    content = stage_file.read_text(encoding="utf-8")
+    prims = _parse_prims_from_usda(content)
+    paths = {p["path"] for p in prims}
+    assert "/World/SideA/Chair/LegA" in paths
+    assert "/World/SideB/Chair/LegA" not in paths
+
+
+def test_set_xform_ops_correct_prim_duplicate_names(tmp_path, monkeypatch):
+    """set_xform_ops must target the correct prim when duplicate leaf names exist."""
+    _force_text_fallback(monkeypatch)
+    stage_file = tmp_path / "scene.usda"
+    create_stage(str(stage_file), name="xform-dup")
+
+    define_prim(str(stage_file), "/World/A/Box", "Xform")
+    define_prim(str(stage_file), "/World/B/Box", "Xform")
+
+    # Set translate on /World/B/Box — must not touch /World/A/Box
+    set_xform_ops(str(stage_file), "/World/B/Box", translate=[5.0, 0.0, 0.0])
+
+    content = stage_file.read_text(encoding="utf-8")
+    b_idx = content.index('"B"')
+    translate_idx = content.index("xformOp:translate")
+    # The translate must appear after B's block start, not A's
+    assert translate_idx > b_idx
+
+
+def test_set_xform_ops_only_includes_passed_ops(tmp_path, monkeypatch):
+    """xformOpOrder must only list ops that were actually passed, not all three."""
+    _force_text_fallback(monkeypatch)
+    stage_file = tmp_path / "scene.usda"
+    create_stage(str(stage_file), name="xform-order")
+
+    define_prim(str(stage_file), "/World/Cube", "Xform")
+    # Only pass translate — xformOpOrder must mention only translate
+    set_xform_ops(str(stage_file), "/World/Cube", translate=[1.0, 2.0, 3.0])
+
+    content = stage_file.read_text(encoding="utf-8")
+    assert "xformOp:translate" in content
+    assert "xformOp:rotateXYZ" not in content
+    assert "xformOp:scale" not in content
+    assert '"xformOp:translate"' in content
+    # xformOpOrder must not list rotate or scale
+    order_line = [line for line in content.splitlines() if "xformOpOrder" in line][0]
+    assert "rotate" not in order_line
+    assert "scale" not in order_line
+
+
+def test_set_xform_ops_correct_indentation(tmp_path, monkeypatch):
+    """xformOp attributes must be indented correctly relative to the prim."""
+    _force_text_fallback(monkeypatch)
+    stage_file = tmp_path / "scene.usda"
+    create_stage(str(stage_file), name="indent")
+
+    define_prim(str(stage_file), "/World/Parent/Child", "Xform")
+    set_xform_ops(str(stage_file), "/World/Parent/Child", translate=[1.0, 0.0, 0.0])
+
+    content = stage_file.read_text(encoding="utf-8")
+    # Child is at depth 2 → xformOp lines must be indented 12 spaces (3 levels)
+    for line in content.splitlines():
+        if "xformOp:translate" in line:
+            assert line.startswith("            "), f"Wrong indent: {line!r}"
+        if "xformOpOrder" in line:
+            assert line.startswith("            "), f"Wrong indent: {line!r}"
+
+
+def test_build_nested_block_uses_xform_for_ancestors(tmp_path, monkeypatch):
+    """Intermediate nodes must be Xform, only the leaf gets the requested type."""
+    _force_text_fallback(monkeypatch)
+    stage_file = tmp_path / "scene.usda"
+    create_stage(str(stage_file), name="types")
+
+    # No existing parent — full path is built by _build_nested_block
+    define_prim(str(stage_file), "/Foo/Bar", "SphereLight")
+
+    content = stage_file.read_text(encoding="utf-8")
+    prims = _parse_prims_from_usda(content)
+    types = {p["path"]: p["type"] for p in prims}
+    assert types.get("/Foo") == "Xform", f"/Foo should be Xform, got {types.get('/Foo')}"
+    assert types.get("/Foo/Bar") == "SphereLight", f"/Foo/Bar should be SphereLight, got {types.get('/Foo/Bar')}"
+
+
+def test_add_reference_ancestors_xform(tmp_path, monkeypatch):
+    """add_reference with non-Xform type must still make ancestors Xform."""
+    _force_text_fallback(monkeypatch)
+    stage_file = tmp_path / "scene.usda"
+    create_stage(str(stage_file), name="ref-types")
+
+    add_reference(str(stage_file), "/World/Props/Mesh", "assets/mesh.usd", prim_type="Mesh")
+
+    content = stage_file.read_text(encoding="utf-8")
+    prims = _parse_prims_from_usda(content)
+    types = {p["path"]: p["type"] for p in prims}
+    assert types.get("/World/Props") == "Xform", f"/World/Props should be Xform, got {types.get('/World/Props')}"
+    assert types.get("/World/Props/Mesh") == "Mesh"
+
+
+def test_set_stage_metadata_no_duplicate_header(tmp_path, monkeypatch):
+    """set_stage_metadata must not duplicate the #usda header."""
+    _force_text_fallback(monkeypatch)
+    stage_file = tmp_path / "scene.usda"
+    create_stage(str(stage_file), name="no-dup-header")
+
+    set_stage_metadata(str(stage_file), meters_per_unit=0.01)
+
+    content = stage_file.read_text(encoding="utf-8")
+    assert content.count("#usda") == 1, f"Duplicate #usda header: found {content.count('#usda')} occurrences"
+    assert content.lstrip().startswith("#usda")
+    assert "metersPerUnit = 0.01" in content
+
+
+def test_set_stage_metadata_no_duplicate_header_all_fields(tmp_path, monkeypatch):
+    """Duplication must not occur when all metadata fields are set at once."""
+    _force_text_fallback(monkeypatch)
+    stage_file = tmp_path / "scene.usda"
+    create_stage(str(stage_file), name="all-dup")
+
+    set_stage_metadata(str(stage_file), up_axis="X", meters_per_unit=0.01, doc="desc", frames_per_second=30.0)
+
+    content = stage_file.read_text(encoding="utf-8")
+    assert content.count("#usda") == 1
+    assert 'upAxis = "X"' in content
+    assert "metersPerUnit = 0.01" in content
+    assert 'doc = "desc"' in content
+    assert "framesPerSecond = 30" in content
