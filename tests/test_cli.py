@@ -167,3 +167,116 @@ def test_run_daemon_consumes_signal_flag(monkeypatch: pytest.MonkeyPatch):
 
     assert _run_daemon(SimpleNamespace(pidfile="test.pid")) == 0
     assert stop_calls == ["stop"]
+
+
+# ── port 0 semantics ──────────────────────────────────────────────────────
+
+
+def test_port_zero_preserved(monkeypatch: pytest.MonkeyPatch):
+    """--port 0 must be passed through as 0, NOT fall back to DEFAULT_PORT."""
+    captured: dict[str, object] = {}
+
+    def fake_start_server(**kwargs: object) -> object:
+        captured.update(kwargs)
+        return object()
+
+    monkeypatch.setattr(cli, "start_server", fake_start_server)
+
+    args = _build_parser().parse_args(["--port", "0"])
+    _build_server(args)
+
+    assert captured["port"] == 0, f"expected port=0, got {captured['port']}"
+
+
+def test_port_absent_uses_default(monkeypatch: pytest.MonkeyPatch):
+    """When --port is not given, DEFAULT_PORT is used."""
+    captured: dict[str, object] = {}
+
+    def fake_start_server(**kwargs: object) -> object:
+        captured.update(kwargs)
+        return object()
+
+    monkeypatch.setattr(cli, "start_server", fake_start_server)
+
+    args = _build_parser().parse_args([])
+    _build_server(args)
+
+    assert captured["port"] == DEFAULT_PORT
+
+
+def test_cli_port_beats_env(monkeypatch: pytest.MonkeyPatch):
+    """CLI --port must take priority over DCC_MCP_OPENUSD_PORT env var."""
+    monkeypatch.setenv("DCC_MCP_OPENUSD_PORT", "9999")
+
+    captured: dict[str, object] = {}
+
+    def fake_start_server(**kwargs: object) -> object:
+        captured.update(kwargs)
+        return object()
+
+    monkeypatch.setattr(cli, "start_server", fake_start_server)
+
+    args = _build_parser().parse_args(["--port", "5000"])
+    _build_server(args)
+
+    assert captured["port"] == 5000, "CLI --port should override env"
+
+
+def test_env_port_fallback(monkeypatch: pytest.MonkeyPatch):
+    """When --port is absent, DCC_MCP_OPENUSD_PORT env var is used."""
+    monkeypatch.setenv("DCC_MCP_OPENUSD_PORT", "9999")
+
+    captured: dict[str, object] = {}
+
+    def fake_start_server(**kwargs: object) -> object:
+        captured.update(kwargs)
+        return object()
+
+    monkeypatch.setattr(cli, "start_server", fake_start_server)
+
+    args = _build_parser().parse_args([])
+    _build_server(args)
+
+    assert captured["port"] == 9999, "env DCC_MCP_OPENUSD_PORT should be used"
+
+
+# ── signal handler behavior ───────────────────────────────────────────────
+
+
+def test_handle_signal_calls_stop_server():
+    """_handle_signal must call stop_server() immediately, not just set a flag."""
+    import signal as _signal
+
+    stop_calls: list[str] = []
+
+    def fake_stop() -> None:
+        stop_calls.append("stop")
+
+    original_stop = cli.stop_server
+    cli.stop_server = fake_stop  # type: ignore[attr-defined]
+    try:
+        cli._handle_signal(_signal.SIGTERM, None)
+        assert stop_calls == ["stop"], "_handle_signal did not call stop_server"
+        assert cli._signal_received is True
+    finally:
+        cli.stop_server = original_stop  # type: ignore[attr-defined]
+        cli._signal_received = False
+
+
+def test_handle_signal_stop_server_failure_is_silent():
+    """If stop_server raises inside _handle_signal, the exception must not propagate."""
+    import signal as _signal
+
+    original_stop = cli.stop_server
+
+    def fake_stop_raising() -> None:
+        raise RuntimeError("boom")
+
+    cli.stop_server = fake_stop_raising  # type: ignore[attr-defined]
+    try:
+        # Must not raise
+        cli._handle_signal(_signal.SIGTERM, None)
+        assert cli._signal_received is True
+    finally:
+        cli.stop_server = original_stop  # type: ignore[attr-defined]
+        cli._signal_received = False
