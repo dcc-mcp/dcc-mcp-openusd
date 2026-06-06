@@ -1,4 +1,4 @@
-"""Headless OpenUSD MCP server wiring."""
+"""Headless OpenUSD MCP server wiring with daemon runtime integration."""
 
 from __future__ import annotations
 
@@ -34,6 +34,9 @@ class OpenUsdServerOptions:
     registry_dir: Optional[str] = None
     project_dir: Optional[str] = None
     enable_gateway_failover: Optional[bool] = None
+    enable_file_logging: bool = True
+    enable_job_persistence: bool = True
+    enable_telemetry: bool = True
     metrics_enabled: Optional[bool] = None
     dcc_pid: Optional[int] = None
 
@@ -50,14 +53,20 @@ class OpenUsdServerOptions:
             dcc_version="OpenUSD",
             scene=self.project_dir,
             enable_gateway_failover=self.enable_gateway_failover,
-            enable_file_logging=True,
-            enable_telemetry=True,
+            enable_file_logging=self.enable_file_logging,
+            enable_job_persistence=self.enable_job_persistence,
+            enable_telemetry=self.enable_telemetry,
             dcc_pid=self.dcc_pid,
         )
 
 
 class OpenUsdMcpServer(DccServerBase):
-    """Headless MCP server for OpenUSD project and stage skills."""
+    """Headless MCP server for OpenUSD project and stage skills.
+
+    Wraps :class:`DccServerBase` with OpenUSD-specific defaults and
+    runtime detection. Supports daemon mode, gateway failover, and
+    diagnostic tools out of the box.
+    """
 
     def __init__(
         self,
@@ -69,6 +78,9 @@ class OpenUsdMcpServer(DccServerBase):
         registry_dir: Optional[str] = None,
         project_dir: Optional[str] = None,
         enable_gateway_failover: Optional[bool] = None,
+        enable_file_logging: bool = True,
+        enable_job_persistence: bool = True,
+        enable_telemetry: bool = True,
         metrics_enabled: Optional[bool] = None,
         options: Optional[OpenUsdServerOptions] = None,
     ) -> None:
@@ -82,6 +94,9 @@ class OpenUsdMcpServer(DccServerBase):
                 registry_dir=registry_dir,
                 project_dir=project_dir,
                 enable_gateway_failover=enable_gateway_failover,
+                enable_file_logging=enable_file_logging,
+                enable_job_persistence=enable_job_persistence,
+                enable_telemetry=enable_telemetry,
                 metrics_enabled=metrics_enabled,
             )
 
@@ -105,6 +120,27 @@ class OpenUsdMcpServer(DccServerBase):
         """Return the Streamable HTTP MCP endpoint URL."""
         return f"http://127.0.0.1:{self.port}/mcp"
 
+    @property
+    def gateway_url(self) -> Optional[str]:
+        """Return the gateway endpoint URL when this instance is the active gateway."""
+        try:
+            gw_port = getattr(self._config, "gateway_port", 0)
+            if gw_port > 0 and self.is_gateway:
+                return f"http://127.0.0.1:{gw_port}/mcp"
+        except Exception:
+            pass
+        return None
+
+    @property
+    def daemon_status(self) -> Dict[str, Any]:
+        """Return the gateway daemon health status dict."""
+        return dict(getattr(self, "_gateway_daemon_status", {}) or {})
+
+    @property
+    def gateway_runtime_mode(self) -> str:
+        """Return the current gateway runtime mode label."""
+        return str(getattr(self, "_gateway_runtime_mode", "unknown") or "unknown")
+
     def _version_string(self) -> str:
         """Return a compact OpenUSD runtime label."""
         try:
@@ -115,7 +151,7 @@ class OpenUsdMcpServer(DccServerBase):
                 return "OpenUSD " + ".".join(str(part) for part in version)
         except Exception:
             pass
-        return "OpenUSD runtime optional"
+        return "OpenUSD (pxr detection fallback)"
 
     def register_builtin_actions(
         self,
@@ -156,6 +192,9 @@ def start_server(
     registry_dir: Optional[str] = None,
     project_dir: Optional[str] = None,
     enable_gateway_failover: Optional[bool] = None,
+    enable_file_logging: bool = True,
+    enable_job_persistence: bool = True,
+    enable_telemetry: bool = True,
     metrics_enabled: Optional[bool] = None,
 ) -> OpenUsdMcpServer:
     """Start the process-level OpenUSD MCP server singleton."""
@@ -171,6 +210,9 @@ def start_server(
         registry_dir=registry_dir,
         project_dir=project_dir,
         enable_gateway_failover=enable_gateway_failover,
+        enable_file_logging=enable_file_logging,
+        enable_job_persistence=enable_job_persistence,
+        enable_telemetry=enable_telemetry,
         metrics_enabled=metrics_enabled,
     )
     if register_builtins:

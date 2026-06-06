@@ -1,4 +1,4 @@
-"""OpenUSD adapter and skills for DCC MCP Core."""
+"""OpenUSD MCP server — daemon-runtime adapter with uvx launch support."""
 
 from dcc_mcp_openusd.__version__ import __version__
 from dcc_mcp_openusd.runtime import (

@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "dcc-mcp-openusd"
 version = "0.1.1"
-description = "OpenUSD adapter and skills for the DCC Model Context Protocol ecosystem"
+description = "OpenUSD MCP server with daemon runtime — uvx-launchable, defaults to Pixar USD bindings"
 authors = [{ name = "Long Hao", email = "hal.long@outlook.com" }]
 readme = "README.md"
 license = { text = "MIT" }
@@ -26,11 +26,12 @@ classifiers = [
 
 dependencies = [
     "dcc-mcp-core>=0.18.2,<1.0.0",
+    "usd-core>=24.11,<27",
 ]
 
 [project.optional-dependencies]
-openusd = [
-    "usd-core>=24.11,<27",
+daemon = [
+    "dcc-mcp-server>=0.18.0,<1.0.0",
 ]
 dev = [
     "build",
@@ -38,6 +39,7 @@ dev = [
     "ruff>=0.8.0",
     "twine",
     "pyyaml>=6.0",
+    "dcc-mcp-server>=0.18.0,<1.0.0",
 ]
 
 [project.urls]
