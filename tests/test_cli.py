@@ -2,9 +2,6 @@
 
 from __future__ import annotations
 
-import subprocess
-import sys
-
 from dcc_mcp_openusd.cli import _build_parser, main
 from dcc_mcp_openusd.server import DEFAULT_PORT
 
@@ -33,6 +30,7 @@ def test_cli_version_exits_zero():
 def test_cli_help_exits_zero():
     """--help should exit with code 0."""
     import pytest
+
     with pytest.raises(SystemExit) as exc_info:
         main(["--help"])
     assert exc_info.value.code == 0
@@ -42,10 +40,23 @@ def test_uvx_discoverable():
     """dcc-mcp-openusd must be discoverable by uvx."""
     # We don't actually launch uvx (it would start a long-lived server),
     # just verify the package metadata declares the script entry point.
-    import importlib.metadata
+    import sys
 
-    entry_points = importlib.metadata.entry_points(group="console_scripts")
-    script_names = {ep.name for ep in entry_points}
+    if sys.version_info >= (3, 12):
+        from importlib.metadata import entry_points
+
+        eps = entry_points(group="console_scripts")
+    elif sys.version_info >= (3, 10):
+        from importlib.metadata import entry_points
+
+        eps = entry_points().get("console_scripts", [])  # type: ignore[attr-defined]
+    else:
+        # Python 3.9: entry_points() returns dict-like without keyword args
+        from importlib.metadata import entry_points
+
+        eps = entry_points().get("console_scripts", [])  # type: ignore[attr-defined]
+
+    script_names = {ep.name for ep in eps}
     assert "dcc-mcp-openusd" in script_names, (
         "Missing 'dcc-mcp-openusd' console_scripts entry point — uvx will not discover it"
     )
