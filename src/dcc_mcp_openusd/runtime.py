@@ -29,16 +29,37 @@ class RuntimeInfo:
     version: Optional[str] = None
 
 
+_RUNTIME_INFO: Optional[RuntimeInfo] = None
+
+
 def detect_runtime() -> RuntimeInfo:
     """Return optional Pixar USD runtime information."""
+    global _RUNTIME_INFO
+    if _RUNTIME_INFO is not None:
+        return _RUNTIME_INFO
     try:
         from pxr import Usd  # type: ignore
 
         version = getattr(Usd, "GetVersion", lambda: None)()
         label = ".".join(str(part) for part in version) if version else None
-        return RuntimeInfo(has_pxr=True, version=label)
+        _RUNTIME_INFO = RuntimeInfo(has_pxr=True, version=label)
     except Exception:
-        return RuntimeInfo(has_pxr=False)
+        _RUNTIME_INFO = RuntimeInfo(has_pxr=False)
+    return _RUNTIME_INFO
+
+
+def require_pxr(feature: str = "this operation") -> None:
+    """Raise OpenUsdError when pxr is not installed.
+
+    Guard complex authoring paths (UsdShade materials, UsdLux lights,
+    UsdGeomCamera, time samples, variant/payload/sublayer edits) that
+    cannot be expressed through text-fallback.
+    """
+    if not detect_runtime().has_pxr:
+        raise OpenUsdError(
+            f"{feature} requires the Pixar USD (pxr) package. "
+            f"Install it with: pip install usd-core"
+        )
 
 
 def create_project(
@@ -50,6 +71,7 @@ def create_project(
     for child in ("assets", "materials", "lights", "packages", "snapshots"):
         (root / child).mkdir(exist_ok=True)
 
+    runtime = detect_runtime()
     stage_path = root / "scene.usda"
     if not stage_path.exists():
         create_stage(str(stage_path), name=name or root.name, up_axis=up_axis, meters_per_unit=meters_per_unit)
@@ -67,7 +89,12 @@ def create_project(
         "meters_per_unit": meters_per_unit,
     }
     (root / "project.json").write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
-    return {"project_dir": str(root), "stage_file": str(stage_path), "metadata": metadata}
+    return {
+        "project_dir": str(root),
+        "stage_file": str(stage_path),
+        "metadata": metadata,
+        "runtime": "pxr" if runtime.has_pxr else "text-fallback",
+    }
 
 
 def create_stage(
@@ -133,6 +160,11 @@ def list_stage(stage_file: str) -> Dict[str, Any]:
 
 def define_xform(stage_file: str, prim_path: str) -> Dict[str, Any]:
     """Define an Xform prim."""
+    return define_prim(stage_file, prim_path, "Xform")
+
+
+def define_prim(stage_file: str, prim_path: str, prim_type: str = "Xform") -> Dict[str, Any]:
+    """Define a prim with an arbitrary type name, preserving nested hierarchy."""
     path = _existing_file(stage_file)
     prim_path = _normalize_prim_path(prim_path)
     if detect_runtime().has_pxr:
@@ -142,16 +174,21 @@ def define_xform(stage_file: str, prim_path: str) -> Dict[str, Any]:
             stage = Usd.Stage.Open(str(path))
             if stage is None:
                 raise OpenUsdError(f"Could not open stage: {path}")
-            prim = stage.DefinePrim(prim_path, "Xform")
+            existing = stage.GetPrimAtPath(prim_path)
+            created = not (existing and existing.IsValid())
+            prim = stage.DefinePrim(prim_path, prim_type)
             stage.GetRootLayer().Save()
-            return {"stage_file": str(path), "prim_path": str(prim.GetPath()), "runtime": "pxr"}
+            return {"stage_file": str(path), "prim_path": str(prim.GetPath()), "runtime": "pxr", "created": created}
         except Exception:
             pass
 
     text = path.read_text(encoding="utf-8")
-    if prim_path in {prim["path"] for prim in _parse_prims_from_usda(text)}:
+    existing_prims = {p["path"] for p in _parse_prims_from_usda(text)}
+    if prim_path in existing_prims:
         return {"stage_file": str(path), "prim_path": prim_path, "created": False, "runtime": "text-fallback"}
-    path.write_text(text.rstrip() + "\n\n" + _flat_prim_block(prim_path, "Xform") + "\n", encoding="utf-8")
+
+    new_text = _insert_into_usda(text, prim_path, prim_type)
+    path.write_text(new_text, encoding="utf-8")
     return {"stage_file": str(path), "prim_path": prim_path, "created": True, "runtime": "text-fallback"}
 
 
@@ -181,9 +218,143 @@ def add_reference(stage_file: str, prim_path: str, asset_path: str, prim_type: s
             pass
 
     text = path.read_text(encoding="utf-8")
-    block = _flat_prim_block(prim_path, prim_type, reference=reference)
-    path.write_text(text.rstrip() + "\n\n" + block + "\n", encoding="utf-8")
+    existing_prims = {p["path"] for p in _parse_prims_from_usda(text)}
+    if prim_path in existing_prims:
+        return {"stage_file": str(path), "prim_path": prim_path, "asset_path": reference, "runtime": "text-fallback"}
+
+    new_text = _insert_into_usda(text, prim_path, prim_type, reference=reference)
+    path.write_text(new_text, encoding="utf-8")
     return {"stage_file": str(path), "prim_path": prim_path, "asset_path": reference, "runtime": "text-fallback"}
+
+
+def set_xform_ops(
+    stage_file: str,
+    prim_path: str,
+    translate: Optional[List[float]] = None,
+    rotate: Optional[List[float]] = None,
+    scale: Optional[List[float]] = None,
+) -> Dict[str, Any]:
+    """Set transform operations on a prim."""
+    path = _existing_file(stage_file)
+    prim_path = _normalize_prim_path(prim_path)
+
+    if detect_runtime().has_pxr:
+        try:
+            from pxr import Usd, UsdGeom, Gf  # type: ignore
+
+            stage = Usd.Stage.Open(str(path))
+            if stage is None:
+                raise OpenUsdError(f"Could not open stage: {path}")
+            prim = stage.GetPrimAtPath(prim_path)
+            if not prim.IsValid():
+                raise OpenUsdError(f"Prim not found: {prim_path}")
+            xform_api = UsdGeom.XformCommonAPI(prim)
+            if translate is not None:
+                xform_api.SetTranslate(Gf.Vec3d(*translate))
+            if rotate is not None:
+                xform_api.SetRotate(Gf.Vec3f(*rotate))
+            if scale is not None:
+                xform_api.SetScale(Gf.Vec3f(*scale))
+            stage.GetRootLayer().Save()
+            return {"stage_file": str(path), "prim_path": prim_path, "runtime": "pxr"}
+        except Exception:
+            pass
+
+    # text-fallback: add xformOp attributes to the prim block
+    text = path.read_text(encoding="utf-8")
+    prim_name = prim_path.rstrip("/").split("/")[-1]
+    existing_prims = _parse_prims_from_usda(text)
+    if prim_path not in {p["path"] for p in existing_prims}:
+        raise OpenUsdError(f"Prim not found: {prim_path}")
+
+    # Insert xformOp attributes into the prim's block
+    xform_lines = ['        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]']
+    if translate is not None:
+        xform_lines.append(f"        double3 xformOp:translate = ({translate[0]:g}, {translate[1]:g}, {translate[2]:g})")
+    if rotate is not None:
+        xform_lines.append(f"        float3 xformOp:rotateXYZ = ({rotate[0]:g}, {rotate[1]:g}, {rotate[2]:g})")
+    if scale is not None:
+        xform_lines.append(f"        float3 xformOp:scale = ({scale[0]:g}, {scale[1]:g}, {scale[2]:g})")
+
+    # Find the prim block and insert xformOps
+    prim_def_pattern = rf'def\s+\S+\s+"{re.escape(prim_name)}"'
+    match = re.search(prim_def_pattern, text)
+    if match:
+        # Find the opening brace of this prim
+        pos = match.end()
+        while pos < len(text) and text[pos] != "{":
+            pos += 1
+        if pos < len(text) and text[pos] == "{":
+            insert_pos = pos + 1
+            new_text = text[:insert_pos] + "\n" + "\n".join(xform_lines) + "\n" + text[insert_pos:]
+            path.write_text(new_text, encoding="utf-8")
+
+    return {"stage_file": str(path), "prim_path": prim_path, "runtime": "text-fallback"}
+
+
+def set_stage_metadata(
+    stage_file: str,
+    up_axis: Optional[str] = None,
+    meters_per_unit: Optional[float] = None,
+    doc: Optional[str] = None,
+    frames_per_second: Optional[float] = None,
+) -> Dict[str, Any]:
+    """Modify stage-level metadata (upAxis, metersPerUnit, doc, framesPerSecond)."""
+    path = _existing_file(stage_file)
+
+    if detect_runtime().has_pxr:
+        try:
+            from pxr import Usd, UsdGeom  # type: ignore
+
+            stage = Usd.Stage.Open(str(path))
+            if stage is None:
+                raise OpenUsdError(f"Could not open stage: {path}")
+            if up_axis is not None:
+                UsdGeom.SetStageUpAxis(stage, _normalize_axis(up_axis))
+            if meters_per_unit is not None:
+                UsdGeom.SetStageMetersPerUnit(stage, float(meters_per_unit))
+            if doc is not None:
+                stage.SetMetadata("documentation", doc)
+            if frames_per_second is not None:
+                stage.SetMetadata("framesPerSecond", float(frames_per_second))
+            stage.GetRootLayer().Save()
+            return {"stage_file": str(path), "runtime": "pxr"}
+        except Exception:
+            pass
+
+    # text-fallback: modify the metadata block in USDA text
+    text = path.read_text(encoding="utf-8")
+    runtime = "text-fallback"
+
+    # Find the metadata block "( ... )" after "#usda 1.0"
+    meta_match = re.search(r"(#usda\s+1\.0\s*\n\s*)\((.*?)\)", text, re.DOTALL)
+    if not meta_match:
+        return {"stage_file": str(path), "runtime": runtime}
+
+    prefix = meta_match.group(1)
+    inner = meta_match.group(2)
+
+    def _set_meta(key: str, value_str: str) -> str:
+        nonlocal inner
+        if re.search(rf'^\s*{re.escape(key)}\s*=', inner, re.MULTILINE):
+            inner = re.sub(rf'^(\s*{re.escape(key)}\s*=\s*).*$', rf'\1{value_str}', inner, flags=re.MULTILINE)
+        else:
+            inner = inner.rstrip() + f"\n    {key} = {value_str}\n"
+        return inner
+
+    if up_axis is not None:
+        _normalize_axis(up_axis)
+        inner = _set_meta("upAxis", f'"{up_axis}"')
+    if meters_per_unit is not None:
+        inner = _set_meta("metersPerUnit", f"{float(meters_per_unit):g}")
+    if doc is not None:
+        inner = _set_meta("doc", f'"{doc}"')
+    if frames_per_second is not None:
+        inner = _set_meta("framesPerSecond", f"{float(frames_per_second):g}")
+
+    new_text = text[: meta_match.start()] + f"#usda 1.0{prefix}(\n{inner}\n)" + text[meta_match.end() :]
+    path.write_text(new_text, encoding="utf-8")
+    return {"stage_file": str(path), "runtime": runtime}
 
 
 def validate_stage(stage_file: str, strict: bool = False) -> Dict[str, Any]:
@@ -235,7 +406,12 @@ def snapshot_stage(stage_file: str, output_dir: str, name: Optional[str] = None)
     label = _safe_name(name or f"{source.stem}-{int(time.time())}")
     target = target_dir / f"{label}{source.suffix or '.usda'}"
     shutil.copy2(source, target)
-    return {"stage_file": str(source), "snapshot_file": str(target)}
+    runtime = detect_runtime()
+    return {
+        "stage_file": str(source),
+        "snapshot_file": str(target),
+        "runtime": "pxr" if runtime.has_pxr else "text-fallback",
+    }
 
 
 def package_usdz(stage_file: str, output_file: str) -> Dict[str, Any]:
@@ -259,6 +435,9 @@ def package_usdz(stage_file: str, output_file: str) -> Dict[str, Any]:
     return {"stage_file": str(source), "package_file": str(target), "runtime": "text-fallback"}
 
 
+# ── internal helpers ──
+
+
 def _minimal_usda(name: str, up_axis: str, meters_per_unit: float) -> str:
     safe_name = _safe_name(name)
     return (
@@ -275,18 +454,103 @@ def _minimal_usda(name: str, up_axis: str, meters_per_unit: float) -> str:
     )
 
 
-def _flat_prim_block(prim_path: str, prim_type: str, reference: Optional[str] = None) -> str:
-    name = prim_path.rstrip("/").split("/")[-1]
-    if reference:
-        return f'def {prim_type} "{name}" (\n    prepend references = @{reference}@\n)\n{{\n}}'
-    return f'def {prim_type} "{name}"\n{{\n}}'
+def _build_nested_block(parts: List[str], prim_type: str, reference: Optional[str] = None) -> str:
+    """Build a nested USDA def block from path segments."""
+    lines: List[str] = []
+    for i, part in enumerate(parts):
+        indent = "    " * i
+        is_leaf = i == len(parts) - 1
+        if is_leaf and reference:
+            lines.append(f'{indent}def {prim_type} "{part}" (')
+            lines.append(f"{indent}    prepend references = @{reference}@")
+            lines.append(f"{indent})")
+        else:
+            lines.append(f'{indent}def {prim_type} "{part}"')
+        lines.append(f"{indent}{{")
+
+    for i in range(len(parts) - 1, -1, -1):
+        indent = "    " * i
+        lines.append(f"{indent}}}")
+
+    return "\n".join(lines)
+
+
+def _insert_into_usda(
+    text: str, prim_path: str, prim_type: str, reference: Optional[str] = None
+) -> str:
+    """Insert a prim into USDA text at the correct hierarchy level."""
+    parts = [p for p in prim_path.strip("/").split("/") if p]
+    if not parts:
+        raise OpenUsdError("prim_path must name a prim")
+
+    existing = {p["path"] for p in _parse_prims_from_usda(text)}
+
+    # Find the deepest existing parent
+    existing_parent = ""
+    for i in range(len(parts) - 1, -1, -1):
+        candidate = "/" + "/".join(parts[: i + 1])
+        if candidate in existing:
+            existing_parent = candidate
+            break
+
+    if existing_parent:
+        # Insert inside the existing parent
+        parent_name = existing_parent.rstrip("/").split("/")[-1]
+        remaining = parts[parts.index(parent_name) + 1 :]
+        if not remaining:
+            return text  # Already exists
+        block = _build_nested_block(remaining, prim_type, reference)
+        return _insert_after_opening_brace(text, parent_name, block)
+    else:
+        # No parent exists — append full nested block at end
+        block = _build_nested_block(parts, prim_type, reference)
+        return text.rstrip() + "\n\n" + block + "\n"
+
+
+def _insert_after_opening_brace(text: str, prim_name: str, block: str) -> str:
+    """Insert USDA block after the opening brace of a named prim."""
+    pattern = rf'def\s+\S+\s+"{re.escape(prim_name)}"'
+    match = re.search(pattern, text)
+    if not match:
+        return text.rstrip() + "\n\n" + block + "\n"
+
+    # Find the opening brace after the def line
+    pos = match.end()
+    while pos < len(text) and text[pos] not in ("{", "\n"):
+        pos += 1
+    if pos >= len(text) or text[pos] != "{":
+        pos = text.index("{", match.start())
+    insert_pos = pos + 1
+
+    # Indent the block
+    indented = "\n".join("    " + line for line in block.splitlines())
+    return text[:insert_pos] + "\n" + indented + "\n" + text[insert_pos:]
 
 
 def _parse_prims_from_usda(text: str) -> List[Dict[str, Any]]:
+    """Parse prim definitions from USDA text, tracking nesting for correct paths."""
     prims: List[Dict[str, Any]] = []
-    for match in re.finditer(r'\b(def|over|class)\s+([A-Za-z_][A-Za-z0-9_]*)\s+"([^"]+)"', text):
-        name = match.group(3)
-        prims.append({"path": f"/{name}", "type": match.group(2), "active": True})
+    path_stack: List[str] = []
+
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+
+        # Match prim definition: def/over/class TypeName "name"
+        match = re.match(r'\b(def|over|class)\s+([A-Za-z_][A-Za-z0-9_]*)\s+"([^"]+)"', stripped)
+        if match:
+            name = match.group(3)
+            path_stack.append(name)
+            full_path = "/" + "/".join(path_stack)
+            prims.append({"path": full_path, "type": match.group(2), "active": True})
+
+        # Track closing braces to pop the stack
+        closes = stripped.count("}")
+        for _ in range(closes):
+            if path_stack:
+                path_stack.pop()
+
     return prims
 
 
