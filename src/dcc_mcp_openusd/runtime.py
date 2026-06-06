@@ -56,10 +56,7 @@ def require_pxr(feature: str = "this operation") -> None:
     cannot be expressed through text-fallback.
     """
     if not detect_runtime().has_pxr:
-        raise OpenUsdError(
-            f"{feature} requires the Pixar USD (pxr) package. "
-            f"Install it with: pip install usd-core"
-        )
+        raise OpenUsdError(f"{feature} requires the Pixar USD (pxr) package. Install it with: pip install usd-core")
 
 
 def create_project(
@@ -270,7 +267,9 @@ def set_xform_ops(
     # Insert xformOp attributes into the prim's block
     xform_lines = ['        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:rotateXYZ", "xformOp:scale"]']
     if translate is not None:
-        xform_lines.append(f"        double3 xformOp:translate = ({translate[0]:g}, {translate[1]:g}, {translate[2]:g})")
+        xform_lines.append(
+            f"        double3 xformOp:translate = ({translate[0]:g}, {translate[1]:g}, {translate[2]:g})"
+        )
     if rotate is not None:
         xform_lines.append(f"        float3 xformOp:rotateXYZ = ({rotate[0]:g}, {rotate[1]:g}, {rotate[2]:g})")
     if scale is not None:
@@ -336,8 +335,8 @@ def set_stage_metadata(
 
     def _set_meta(key: str, value_str: str) -> str:
         nonlocal inner
-        if re.search(rf'^\s*{re.escape(key)}\s*=', inner, re.MULTILINE):
-            inner = re.sub(rf'^(\s*{re.escape(key)}\s*=\s*).*$', rf'\1{value_str}', inner, flags=re.MULTILINE)
+        if re.search(rf"^\s*{re.escape(key)}\s*=", inner, re.MULTILINE):
+            inner = re.sub(rf"^(\s*{re.escape(key)}\s*=\s*).*$", rf"\1{value_str}", inner, flags=re.MULTILINE)
         else:
             inner = inner.rstrip() + f"\n    {key} = {value_str}\n"
         return inner
@@ -475,9 +474,7 @@ def _build_nested_block(parts: List[str], prim_type: str, reference: Optional[st
     return "\n".join(lines)
 
 
-def _insert_into_usda(
-    text: str, prim_path: str, prim_type: str, reference: Optional[str] = None
-) -> str:
+def _insert_into_usda(text: str, prim_path: str, prim_type: str, reference: Optional[str] = None) -> str:
     """Insert a prim into USDA text at the correct hierarchy level."""
     parts = [p for p in prim_path.strip("/").split("/") if p]
     if not parts:

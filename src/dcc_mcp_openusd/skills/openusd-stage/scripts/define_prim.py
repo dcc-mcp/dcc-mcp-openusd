@@ -18,7 +18,9 @@ def main() -> int:
 
     try:
         context = define_prim(args.stage_file, args.prim_path, args.prim_type)
-        print(json.dumps({"success": True, "message": f"Defined {args.prim_path} ({args.prim_type})", "context": context}))
+        print(
+            json.dumps({"success": True, "message": f"Defined {args.prim_path} ({args.prim_type})", "context": context})
+        )
         return 0
     except OpenUsdError as exc:
         print(json.dumps({"success": False, "message": str(exc)}))

@@ -220,19 +220,19 @@ def test_snapshot_stage(tmp_path):
 
 def test_parse_prims_tracks_nesting():
     usda = (
-        '#usda 1.0\n'
-        '(\n'
+        "#usda 1.0\n"
+        "(\n"
         '    defaultPrim = "World"\n'
-        ')\n\n'
+        ")\n\n"
         'def Xform "World"\n'
-        '{\n'
+        "{\n"
         '    def Xform "Chair"\n'
-        '    {\n'
+        "    {\n"
         '        def Xform "LegA"\n'
-        '        {\n'
-        '        }\n'
-        '    }\n'
-        '}\n'
+        "        {\n"
+        "        }\n"
+        "    }\n"
+        "}\n"
     )
     prims = _parse_prims_from_usda(usda)
     paths = {p["path"] for p in prims}
@@ -280,15 +280,7 @@ def test_build_nested_block_with_reference():
 
 def test_insert_into_usda_new_path(tmp_path):
     """Insert a new prim path into USDA with an existing parent."""
-    usda_base = (
-        '#usda 1.0\n'
-        '(\n'
-        '    defaultPrim = "World"\n'
-        ')\n\n'
-        'def Xform "World"\n'
-        '{\n'
-        '}\n'
-    )
+    usda_base = '#usda 1.0\n(\n    defaultPrim = "World"\n)\n\ndef Xform "World"\n{\n}\n'
     result = _insert_into_usda(usda_base, "/World/Chair", "Xform")
     prims = _parse_prims_from_usda(result)
     paths = {p["path"] for p in prims}
@@ -298,15 +290,7 @@ def test_insert_into_usda_new_path(tmp_path):
 
 def test_insert_into_usda_no_parent(tmp_path):
     """Insert a prim when no parent exists — full nested block appended."""
-    usda_base = (
-        '#usda 1.0\n'
-        '(\n'
-        '    defaultPrim = "World"\n'
-        ')\n\n'
-        'def Xform "World"\n'
-        '{\n'
-        '}\n'
-    )
+    usda_base = '#usda 1.0\n(\n    defaultPrim = "World"\n)\n\ndef Xform "World"\n{\n}\n'
     result = _insert_into_usda(usda_base, "/Foo/Bar", "Xform")
     prims = _parse_prims_from_usda(result)
     paths = {p["path"] for p in prims}
