@@ -46,8 +46,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     _install_signal_handlers()
 
     try:
-        while server.is_running:
-            time.sleep(1)
+        _wait_for_shutdown(server)
     except KeyboardInterrupt:
         print("\nShutting down...")
     finally:
@@ -71,7 +70,6 @@ def _build_parser() -> argparse.ArgumentParser:
     net.add_argument("--port", type=int, default=None, help=f"Port to listen on (default: {DEFAULT_PORT})")
     net.add_argument("--gateway-port", type=int, default=None, help="Gateway port for multi-instance failover")
     net.add_argument("--registry-dir", default=None, help="Optional gateway registry directory")
-    net.add_argument("--host", default="127.0.0.1", help="Bind host (default: 127.0.0.1)")
 
     # OpenUSD context
     usd = parser.add_argument_group("openusd")
@@ -153,6 +151,7 @@ def _build_server(args: argparse.Namespace) -> OpenUsdMcpServer:
         registry_dir=registry_dir,
         project_dir=args.project_dir,
         enable_gateway_failover=enable_gateway_failover,
+        enable_file_logging=not args.no_file_logging,
         metrics_enabled=args.metrics,
     )
 
@@ -184,8 +183,7 @@ def _run_daemon(args: argparse.Namespace) -> int:
 
         # Run forever; the daemon owns its lifecycle.
         _install_signal_handlers()
-        while server.is_running:
-            time.sleep(1)
+        _wait_for_shutdown(server)
     except KeyboardInterrupt:
         pass
     except Exception as exc:
@@ -208,7 +206,14 @@ def _handle_signal(signum: int, _frame: object) -> None:
     logger.info("Received signal %d, shutting down...", signum)
 
 
+def _wait_for_shutdown(server: OpenUsdMcpServer) -> None:
+    while server.is_running and not _signal_received:
+        time.sleep(1)
+
+
 def _install_signal_handlers() -> None:
+    global _signal_received
+    _signal_received = False
     for sig in (signal.SIGINT, signal.SIGTERM):
         try:
             signal.signal(sig, _handle_signal)
