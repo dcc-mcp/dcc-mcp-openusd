@@ -46,10 +46,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     _install_signal_handlers()
 
     try:
-        while server.is_running:
-            time.sleep(1)
-    except KeyboardInterrupt:
-        print("\nShutting down...")
+        while server.is_running and not _signal_received:
+            time.sleep(0.5)
     finally:
         stop_server()
     return 0
@@ -71,7 +69,6 @@ def _build_parser() -> argparse.ArgumentParser:
     net.add_argument("--port", type=int, default=None, help=f"Port to listen on (default: {DEFAULT_PORT})")
     net.add_argument("--gateway-port", type=int, default=None, help="Gateway port for multi-instance failover")
     net.add_argument("--registry-dir", default=None, help="Optional gateway registry directory")
-    net.add_argument("--host", default="127.0.0.1", help="Bind host (default: 127.0.0.1)")
 
     # OpenUSD context
     usd = parser.add_argument_group("openusd")
@@ -126,8 +123,16 @@ def _setup_logging(debug: bool) -> None:
 
 
 def _build_server(args: argparse.Namespace) -> OpenUsdMcpServer:
-    """Construct an OpenUsdMcpServer from parsed CLI args + env."""
-    port = args.port or int(os.environ.get("DCC_MCP_OPENUSD_PORT", DEFAULT_PORT))
+    """Construct an OpenUsdMcpServer from parsed CLI args + env.
+
+    CLI flags take priority over environment variables.
+    ``--port 0`` is supported: it tells core to let the OS assign a free port.
+    """
+    # Port: ``None`` means "not set"; explicit ``0`` must be preserved.
+    port = args.port
+    if port is None:
+        env_port = os.environ.get("DCC_MCP_OPENUSD_PORT")
+        port = int(env_port) if env_port else DEFAULT_PORT
 
     # Gateway failover: CLI flag wins, then env var, then server default
     enable_gateway_failover = args.enable_gateway_failover
@@ -144,7 +149,12 @@ def _build_server(args: argparse.Namespace) -> OpenUsdMcpServer:
         if env_gw:
             gateway_port = int(env_gw)
 
-    registry_dir = args.registry_dir or os.environ.get("DCC_MCP_REGISTRY_DIR")
+    registry_dir = args.registry_dir
+    if not registry_dir:
+        registry_dir = os.environ.get("DCC_MCP_REGISTRY_DIR") or None
+
+    # --no-file-logging flag flips the default.
+    enable_file_logging = not args.no_file_logging
 
     return start_server(
         port=port,
@@ -153,6 +163,7 @@ def _build_server(args: argparse.Namespace) -> OpenUsdMcpServer:
         registry_dir=registry_dir,
         project_dir=args.project_dir,
         enable_gateway_failover=enable_gateway_failover,
+        enable_file_logging=enable_file_logging,
         metrics_enabled=args.metrics,
     )
 
@@ -184,10 +195,8 @@ def _run_daemon(args: argparse.Namespace) -> int:
 
         # Run forever; the daemon owns its lifecycle.
         _install_signal_handlers()
-        while server.is_running:
-            time.sleep(1)
-    except KeyboardInterrupt:
-        pass
+        while server.is_running and not _signal_received:
+            time.sleep(0.5)
     except Exception as exc:
         logger.error("Daemon failed: %s", exc, exc_info=True)
         return 1
@@ -203,9 +212,20 @@ _signal_received: bool = False
 
 
 def _handle_signal(signum: int, _frame: object) -> None:
+    """Set the shutdown flag and stop the server on SIGINT / SIGTERM.
+
+    Does **not** call ``sys.exit`` — the main loop polls ``_signal_received``
+    and exits cleanly through ``stop_server()`` in the ``finally`` block.
+    """
     global _signal_received
     _signal_received = True
     logger.info("Received signal %d, shutting down...", signum)
+    # Best-effort immediate stop so the loop exits promptly even if
+    # the server is stuck in a long-running operation.
+    try:
+        stop_server()
+    except Exception:
+        pass
 
 
 def _install_signal_handlers() -> None:
