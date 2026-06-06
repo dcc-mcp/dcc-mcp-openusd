@@ -382,7 +382,6 @@ def test_set_xform_ops_correct_prim_duplicate_names(tmp_path, monkeypatch):
     set_xform_ops(str(stage_file), "/World/B/Box", translate=[5.0, 0.0, 0.0])
 
     content = stage_file.read_text(encoding="utf-8")
-    a_idx = content.index('"A"')
     b_idx = content.index('"B"')
     translate_idx = content.index("xformOp:translate")
     # The translate must appear after B's block start, not A's
@@ -405,7 +404,7 @@ def test_set_xform_ops_only_includes_passed_ops(tmp_path, monkeypatch):
     assert "xformOp:scale" not in content
     assert '"xformOp:translate"' in content
     # xformOpOrder must not list rotate or scale
-    order_line = [l for l in content.splitlines() if "xformOpOrder" in l][0]
+    order_line = [line for line in content.splitlines() if "xformOpOrder" in line][0]
     assert "rotate" not in order_line
     assert "scale" not in order_line
 
