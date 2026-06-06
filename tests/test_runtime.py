@@ -456,3 +456,33 @@ def test_add_reference_ancestors_xform(tmp_path, monkeypatch):
     types = {p["path"]: p["type"] for p in prims}
     assert types.get("/World/Props") == "Xform", f"/World/Props should be Xform, got {types.get('/World/Props')}"
     assert types.get("/World/Props/Mesh") == "Mesh"
+
+
+def test_set_stage_metadata_no_duplicate_header(tmp_path, monkeypatch):
+    """set_stage_metadata must not duplicate the #usda header."""
+    _force_text_fallback(monkeypatch)
+    stage_file = tmp_path / "scene.usda"
+    create_stage(str(stage_file), name="no-dup-header")
+
+    set_stage_metadata(str(stage_file), meters_per_unit=0.01)
+
+    content = stage_file.read_text(encoding="utf-8")
+    assert content.count("#usda") == 1, f"Duplicate #usda header: found {content.count('#usda')} occurrences"
+    assert content.lstrip().startswith("#usda")
+    assert "metersPerUnit = 0.01" in content
+
+
+def test_set_stage_metadata_no_duplicate_header_all_fields(tmp_path, monkeypatch):
+    """Duplication must not occur when all metadata fields are set at once."""
+    _force_text_fallback(monkeypatch)
+    stage_file = tmp_path / "scene.usda"
+    create_stage(str(stage_file), name="all-dup")
+
+    set_stage_metadata(str(stage_file), up_axis="X", meters_per_unit=0.01, doc="desc", frames_per_second=30.0)
+
+    content = stage_file.read_text(encoding="utf-8")
+    assert content.count("#usda") == 1
+    assert 'upAxis = "X"' in content
+    assert "metersPerUnit = 0.01" in content
+    assert 'doc = "desc"' in content
+    assert "framesPerSecond = 30" in content

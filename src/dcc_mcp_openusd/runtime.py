@@ -354,7 +354,7 @@ def set_stage_metadata(
     if frames_per_second is not None:
         inner = _set_meta("framesPerSecond", f"{float(frames_per_second):g}")
 
-    new_text = text[: meta_match.start()] + f"#usda 1.0{prefix}(\n{inner}\n)" + text[meta_match.end() :]
+    new_text = text[: meta_match.start()] + f"{prefix}(\n{inner}\n)" + text[meta_match.end() :]
     path.write_text(new_text, encoding="utf-8")
     return {"stage_file": str(path), "runtime": runtime}
 
