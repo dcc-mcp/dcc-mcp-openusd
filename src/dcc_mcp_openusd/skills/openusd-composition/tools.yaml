@@ -1,0 +1,120 @@
+tools:
+  - name: add_sublayer
+    description: Add a sublayer to the stage's root layer.
+    input_schema:
+      type: object
+      required: [stage_file, sublayer_path]
+      properties:
+        stage_file:
+          type: string
+          description: Stage file to mutate.
+        sublayer_path:
+          type: string
+          description: Path to the sublayer file (.usd/.usda).
+        position:
+          type: integer
+          description: Optional insertion index in the sublayer stack.
+    read_only: false
+    destructive: false
+    idempotent: false
+    execution: sync
+    timeout_hint_secs: 30
+    source_file: scripts/add_sublayer.py
+    annotations:
+      read_only_hint: false
+      destructive_hint: false
+      idempotent_hint: false
+    next-tools:
+      on-success:
+        - openusd_stage__list_stage
+
+  - name: add_payload
+    description: Add a payload arc on a prim.
+    input_schema:
+      type: object
+      required: [stage_file, prim_path, payload_path]
+      properties:
+        stage_file:
+          type: string
+          description: Stage file to mutate.
+        prim_path:
+          type: string
+          description: Prim to attach the payload to.
+        payload_path:
+          type: string
+          description: Path to the payload asset (.usd/.usda).
+    read_only: false
+    destructive: false
+    idempotent: false
+    execution: sync
+    timeout_hint_secs: 30
+    source_file: scripts/add_payload.py
+    annotations:
+      read_only_hint: false
+      destructive_hint: false
+      idempotent_hint: false
+    next-tools:
+      on-success:
+        - openusd_stage__list_stage
+
+  - name: add_variant_set
+    description: Create a variant set on a prim.
+    input_schema:
+      type: object
+      required: [stage_file, prim_path, variant_set_name]
+      properties:
+        stage_file:
+          type: string
+          description: Stage file to mutate.
+        prim_path:
+          type: string
+          description: Prim to add the variant set to.
+        variant_set_name:
+          type: string
+          description: Name of the variant set to create.
+    read_only: false
+    destructive: false
+    idempotent: true
+    execution: sync
+    timeout_hint_secs: 30
+    source_file: scripts/add_variant_set.py
+    annotations:
+      read_only_hint: false
+      destructive_hint: false
+      idempotent_hint: true
+    next-tools:
+      on-success:
+        - openusd_composition__set_variant_selection
+        - openusd_stage__list_stage
+
+  - name: set_variant_selection
+    description: Set the active variant selection in a variant set.
+    input_schema:
+      type: object
+      required: [stage_file, prim_path, variant_set_name, variant_name]
+      properties:
+        stage_file:
+          type: string
+          description: Stage file to mutate.
+        prim_path:
+          type: string
+          description: Prim that owns the variant set.
+        variant_set_name:
+          type: string
+          description: Name of the variant set.
+        variant_name:
+          type: string
+          description: Name of the variant to select.
+    read_only: false
+    destructive: false
+    idempotent: false
+    execution: sync
+    timeout_hint_secs: 30
+    source_file: scripts/set_variant_selection.py
+    annotations:
+      read_only_hint: false
+      destructive_hint: false
+      idempotent_hint: false
+    next-tools:
+      on-success:
+        - openusd_stage__list_stage

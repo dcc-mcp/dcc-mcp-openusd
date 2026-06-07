@@ -1,0 +1,160 @@
+tools:
+  - name: create_camera
+    description: Create a UsdGeomCamera prim with focalLength, focusDistance, and fStop attributes.
+    input_schema:
+      type: object
+      required: [stage_file, prim_path]
+      properties:
+        stage_file:
+          type: string
+          description: Stage file to mutate.
+        prim_path:
+          type: string
+          description: Absolute prim path for the camera, e.g. /World/Camera.
+        focal_length:
+          type: number
+          default: 50.0
+          description: Focal length in mm.
+        focus_distance:
+          type: number
+          default: 100.0
+          description: Focus distance.
+        f_stop:
+          type: number
+          default: 2.8
+          description: f-stop aperture.
+    read_only: false
+    destructive: false
+    idempotent: true
+    execution: sync
+    timeout_hint_secs: 30
+    source_file: scripts/create_camera.py
+    annotations:
+      read_only_hint: false
+      destructive_hint: false
+      idempotent_hint: true
+    next-tools:
+      on-success:
+        - openusd_light_camera__set_transform
+        - openusd_stage__list_stage
+
+  - name: create_distant_light
+    description: Create a DistantLight prim with angle, intensity, and color.
+    input_schema:
+      type: object
+      required: [stage_file, prim_path]
+      properties:
+        stage_file:
+          type: string
+          description: Stage file to mutate.
+        prim_path:
+          type: string
+          description: Absolute prim path for the light.
+        angle:
+          type: number
+          default: 0.53
+          description: Angular size in degrees.
+        intensity:
+          type: number
+          default: 1.0
+          description: Light intensity.
+        color:
+          type: array
+          items:
+            type: number
+          description: RGB color as [r, g, b].
+    read_only: false
+    destructive: false
+    idempotent: true
+    execution: sync
+    timeout_hint_secs: 30
+    source_file: scripts/create_distant_light.py
+    annotations:
+      read_only_hint: false
+      destructive_hint: false
+      idempotent_hint: true
+    next-tools:
+      on-success:
+        - openusd_light_camera__set_transform
+        - openusd_stage__list_stage
+
+  - name: create_sphere_light
+    description: Create a SphereLight prim with radius, intensity, and color.
+    input_schema:
+      type: object
+      required: [stage_file, prim_path]
+      properties:
+        stage_file:
+          type: string
+          description: Stage file to mutate.
+        prim_path:
+          type: string
+          description: Absolute prim path for the light.
+        radius:
+          type: number
+          default: 1.0
+          description: Sphere radius.
+        intensity:
+          type: number
+          default: 1.0
+          description: Light intensity.
+        color:
+          type: array
+          items:
+            type: number
+          description: RGB color as [r, g, b].
+    read_only: false
+    destructive: false
+    idempotent: true
+    execution: sync
+    timeout_hint_secs: 30
+    source_file: scripts/create_sphere_light.py
+    annotations:
+      read_only_hint: false
+      destructive_hint: false
+      idempotent_hint: true
+    next-tools:
+      on-success:
+        - openusd_light_camera__set_transform
+        - openusd_stage__list_stage
+
+  - name: set_transform
+    description: Set translate, rotate (XYZ euler), and/or scale on an Xformable prim.
+    input_schema:
+      type: object
+      required: [stage_file, prim_path]
+      properties:
+        stage_file:
+          type: string
+          description: Stage file to mutate.
+        prim_path:
+          type: string
+          description: Prim to transform.
+        translate:
+          type: array
+          items:
+            type: number
+          description: Translation as [x, y, z].
+        rotate:
+          type: array
+          items:
+            type: number
+          description: Euler rotation in degrees as [x, y, z].
+        scale:
+          type: array
+          items:
+            type: number
+          description: Scale as [x, y, z].
+    read_only: false
+    destructive: false
+    idempotent: false
+    execution: sync
+    timeout_hint_secs: 30
+    source_file: scripts/set_transform.py
+    annotations:
+      read_only_hint: false
+      destructive_hint: false
+      idempotent_hint: false
+    next-tools:
+      on-success:
+        - openusd_stage__list_stage
