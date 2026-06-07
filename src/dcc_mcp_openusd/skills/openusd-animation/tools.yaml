@@ -1,0 +1,108 @@
+tools:
+  - name: set_time_codes
+    description: Set the time range and frame rate on a stage.
+    input_schema:
+      type: object
+      required: [stage_file]
+      properties:
+        stage_file:
+          type: string
+          description: Stage file to mutate.
+        start_time_code:
+          type: number
+          default: 1.0
+          description: Start time code (frame).
+        end_time_code:
+          type: number
+          default: 120.0
+          description: End time code (frame).
+        frames_per_second:
+          type: number
+          default: 24.0
+          description: Frame rate.
+    read_only: false
+    destructive: false
+    idempotent: false
+    execution: sync
+    timeout_hint_secs: 30
+    source_file: scripts/set_time_codes.py
+    annotations:
+      read_only_hint: false
+      destructive_hint: false
+      idempotent_hint: false
+    next-tools:
+      on-success:
+        - openusd_animation__author_xform_samples
+        - openusd_animation__author_attribute_samples
+
+  - name: author_xform_samples
+    description: >-
+      Write translate/rotate/scale time samples on an Xformable prim.
+      Samples should be a JSON array of objects with "time" (number) and
+      optional "translate", "rotate", "scale" (each [x, y, z]).
+    input_schema:
+      type: object
+      required: [stage_file, prim_path, samples]
+      properties:
+        stage_file:
+          type: string
+          description: Stage file to mutate.
+        prim_path:
+          type: string
+          description: Xformable prim to write samples on.
+        samples:
+          type: array
+          description: >-
+            JSON array of {time, translate?, rotate?, scale?} dicts.
+          items:
+            type: object
+    read_only: false
+    destructive: false
+    idempotent: false
+    execution: sync
+    timeout_hint_secs: 30
+    source_file: scripts/author_xform_samples.py
+    annotations:
+      read_only_hint: false
+      destructive_hint: false
+      idempotent_hint: false
+    next-tools:
+      on-success:
+        - openusd_stage__list_stage
+
+  - name: author_attribute_samples
+    description: >-
+      Write time samples on an arbitrary attribute.
+      Samples should be a JSON array of objects with "time" (number) and "value".
+    input_schema:
+      type: object
+      required: [stage_file, prim_path, attribute_name, samples]
+      properties:
+        stage_file:
+          type: string
+          description: Stage file to mutate.
+        prim_path:
+          type: string
+          description: Prim that owns the attribute.
+        attribute_name:
+          type: string
+          description: Name of the attribute to sample.
+        samples:
+          type: array
+          description: >-
+            JSON array of {time, value} dicts.
+          items:
+            type: object
+    read_only: false
+    destructive: false
+    idempotent: false
+    execution: sync
+    timeout_hint_secs: 30
+    source_file: scripts/author_attribute_samples.py
+    annotations:
+      read_only_hint: false
+      destructive_hint: false
+      idempotent_hint: false
+    next-tools:
+      on-success:
+        - openusd_stage__list_stage
