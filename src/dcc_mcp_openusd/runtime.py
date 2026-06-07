@@ -612,3 +612,430 @@ def _relative_asset_path(stage_dir: Path, asset: Path) -> str:
         return asset.resolve().relative_to(stage_dir.resolve()).as_posix()
     except Exception:
         return asset.as_posix()
+
+
+# ---------------------------------------------------------------------------
+# pxr-required helpers — fail fast without OpenUSD runtime
+# ---------------------------------------------------------------------------
+
+_MISSING_PXR_MESSAGE = "OpenUSD pxr runtime is required for this tool but is not available"
+
+
+def _require_pxr() -> None:
+    """Raise OpenUsdError when the Pixar USD runtime is missing."""
+    if not detect_runtime().has_pxr:
+        raise OpenUsdError(_MISSING_PXR_MESSAGE)
+
+
+def _open_stage(path: Path):
+    """Open an existing stage, failing fast on missing pxr or bad stage."""
+    _require_pxr()
+    from pxr import Usd  # type: ignore
+
+    stage = Usd.Stage.Open(str(path))
+    if stage is None:
+        raise OpenUsdError(f"Could not open stage: {path}")
+    return stage
+
+
+# --- openusd-material -------------------------------------------------------
+
+
+def create_material(stage_file: str, prim_path: str) -> Dict[str, Any]:
+    """Create a UsdShadeMaterial prim in the stage."""
+    path = _existing_file(stage_file)
+    prim_path = _normalize_prim_path(prim_path)
+
+    from pxr import UsdShade  # type: ignore
+
+    stage = _open_stage(path)
+    material = UsdShade.Material.Define(stage, prim_path)
+    stage.GetRootLayer().Save()
+    return {
+        "stage_file": str(path),
+        "material_path": str(material.GetPath()),
+        "runtime": "pxr",
+    }
+
+
+def create_preview_surface(
+    stage_file: str,
+    material_path: str,
+    shader_path: Optional[str] = None,
+    diffuse_color: Optional[List[float]] = None,
+) -> Dict[str, Any]:
+    """Create a UsdPreviewSurface shader and connect it to the material's surface output."""
+    path = _existing_file(stage_file)
+    material_path = _normalize_prim_path(material_path)
+
+    from pxr import Sdf, UsdShade  # type: ignore
+
+    stage = _open_stage(path)
+    material = UsdShade.Material.Get(stage, material_path)
+    if not material:
+        raise OpenUsdError(f"Material not found: {material_path}")
+
+    if shader_path is None:
+        shader_path = f"{material_path}/Shader"
+    shader_path = _normalize_prim_path(shader_path)
+
+    shader = UsdShade.Shader.Define(stage, shader_path)
+    shader.CreateIdAttr("UsdPreviewSurface")
+    if diffuse_color:
+        color = tuple(float(c) for c in diffuse_color[:3])
+        shader.CreateInput("diffuseColor", Sdf.ValueTypeNames.Color3f).Set(color)
+
+    material.CreateSurfaceOutput().ConnectToSource(shader.ConnectableAPI(), "surface")
+    stage.GetRootLayer().Save()
+    return {
+        "stage_file": str(path),
+        "material_path": material_path,
+        "shader_path": shader_path,
+        "runtime": "pxr",
+    }
+
+
+def bind_material(stage_file: str, prim_path: str, material_path: str) -> Dict[str, Any]:
+    """Bind a UsdShadeMaterial to a prim."""
+    path = _existing_file(stage_file)
+    prim_path = _normalize_prim_path(prim_path)
+    material_path = _normalize_prim_path(material_path)
+
+    from pxr import UsdShade  # type: ignore
+
+    stage = _open_stage(path)
+    prim = stage.GetPrimAtPath(prim_path)
+    if not prim or not prim.IsValid():
+        raise OpenUsdError(f"Prim not found: {prim_path}")
+    material = UsdShade.Material.Get(stage, material_path)
+    if not material:
+        raise OpenUsdError(f"Material not found: {material_path}")
+
+    UsdShade.MaterialBindingAPI.Apply(prim).Bind(material)
+    stage.GetRootLayer().Save()
+    return {
+        "stage_file": str(path),
+        "prim_path": prim_path,
+        "material_path": material_path,
+        "runtime": "pxr",
+    }
+
+
+# --- openusd-light-camera ---------------------------------------------------
+
+
+def create_camera(
+    stage_file: str,
+    prim_path: str,
+    focal_length: float = 50.0,
+    focus_distance: float = 100.0,
+    f_stop: float = 2.8,
+) -> Dict[str, Any]:
+    """Create a UsdGeomCamera prim."""
+    path = _existing_file(stage_file)
+    prim_path = _normalize_prim_path(prim_path)
+
+    from pxr import UsdGeom  # type: ignore
+
+    stage = _open_stage(path)
+    camera = UsdGeom.Camera.Define(stage, prim_path)
+    camera.CreateFocalLengthAttr().Set(float(focal_length))
+    camera.CreateFocusDistanceAttr().Set(float(focus_distance))
+    camera.CreateFStopAttr().Set(float(f_stop))
+    stage.GetRootLayer().Save()
+    return {
+        "stage_file": str(path),
+        "prim_path": prim_path,
+        "runtime": "pxr",
+    }
+
+
+def create_distant_light(
+    stage_file: str,
+    prim_path: str,
+    angle: float = 0.53,
+    intensity: float = 1.0,
+    color: Optional[List[float]] = None,
+) -> Dict[str, Any]:
+    """Create a DistantLight prim."""
+    path = _existing_file(stage_file)
+    prim_path = _normalize_prim_path(prim_path)
+
+    from pxr import Gf, UsdLux  # type: ignore
+
+    stage = _open_stage(path)
+    light = UsdLux.DistantLight.Define(stage, prim_path)
+    light.CreateAngleAttr().Set(float(angle))
+    light.CreateIntensityAttr().Set(float(intensity))
+    if color:
+        light.CreateColorAttr().Set(Gf.Vec3f(*[float(c) for c in color[:3]]))
+    stage.GetRootLayer().Save()
+    return {
+        "stage_file": str(path),
+        "prim_path": prim_path,
+        "runtime": "pxr",
+    }
+
+
+def create_sphere_light(
+    stage_file: str,
+    prim_path: str,
+    radius: float = 1.0,
+    intensity: float = 1.0,
+    color: Optional[List[float]] = None,
+) -> Dict[str, Any]:
+    """Create a SphereLight prim."""
+    path = _existing_file(stage_file)
+    prim_path = _normalize_prim_path(prim_path)
+
+    from pxr import Gf, UsdLux  # type: ignore
+
+    stage = _open_stage(path)
+    light = UsdLux.SphereLight.Define(stage, prim_path)
+    light.CreateRadiusAttr().Set(float(radius))
+    light.CreateIntensityAttr().Set(float(intensity))
+    if color:
+        light.CreateColorAttr().Set(Gf.Vec3f(*[float(c) for c in color[:3]]))
+    stage.GetRootLayer().Save()
+    return {
+        "stage_file": str(path),
+        "prim_path": prim_path,
+        "runtime": "pxr",
+    }
+
+
+def set_transform(
+    stage_file: str,
+    prim_path: str,
+    translate: Optional[List[float]] = None,
+    rotate: Optional[List[float]] = None,
+    scale: Optional[List[float]] = None,
+) -> Dict[str, Any]:
+    """Set translate, rotate (XYZ euler), and/or scale on an Xformable prim."""
+    path = _existing_file(stage_file)
+    prim_path = _normalize_prim_path(prim_path)
+
+    from pxr import Gf, UsdGeom  # type: ignore
+
+    stage = _open_stage(path)
+    prim = stage.GetPrimAtPath(prim_path)
+    if not prim or not prim.IsValid():
+        raise OpenUsdError(f"Prim not found: {prim_path}")
+
+    xform = UsdGeom.Xformable(prim)
+    if translate:
+        xform.AddTranslateOp().Set(Gf.Vec3d(*[float(v) for v in translate[:3]]))
+    if rotate:
+        xform.AddRotateXYZOp().Set(Gf.Vec3f(*[float(v) for v in rotate[:3]]))
+    if scale:
+        xform.AddScaleOp().Set(Gf.Vec3f(*[float(v) for v in scale[:3]]))
+    stage.GetRootLayer().Save()
+    return {
+        "stage_file": str(path),
+        "prim_path": prim_path,
+        "runtime": "pxr",
+    }
+
+
+# --- openusd-animation ------------------------------------------------------
+
+
+def set_time_codes(
+    stage_file: str,
+    start_time_code: float = 1.0,
+    end_time_code: float = 120.0,
+    frames_per_second: float = 24.0,
+) -> Dict[str, Any]:
+    """Set the time range and frame rate on a stage."""
+    path = _existing_file(stage_file)
+
+    stage = _open_stage(path)
+    stage.SetStartTimeCode(float(start_time_code))
+    stage.SetEndTimeCode(float(end_time_code))
+    stage.SetTimeCodesPerSecond(float(frames_per_second))
+    stage.GetRootLayer().Save()
+    return {
+        "stage_file": str(path),
+        "start_time_code": float(start_time_code),
+        "end_time_code": float(end_time_code),
+        "frames_per_second": float(frames_per_second),
+        "runtime": "pxr",
+    }
+
+
+def author_xform_samples(
+    stage_file: str,
+    prim_path: str,
+    samples: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Write translate/rotate/scale time samples on an Xformable prim.
+
+    ``samples`` is a list of dicts::
+
+        [
+            {"time": 1.0, "translate": [0,0,0], "rotate": [0,0,0], "scale": [1,1,1]},
+            {"time": 24.0, "translate": [10,0,0], ...},
+        ]
+    """
+    path = _existing_file(stage_file)
+    prim_path = _normalize_prim_path(prim_path)
+
+    from pxr import Gf, UsdGeom  # type: ignore
+
+    stage = _open_stage(path)
+    prim = stage.GetPrimAtPath(prim_path)
+    if not prim or not prim.IsValid():
+        raise OpenUsdError(f"Prim not found: {prim_path}")
+
+    xform = UsdGeom.Xformable(prim)
+    translate_op = xform.AddTranslateOp()
+    rotate_op = xform.AddRotateXYZOp()
+    scale_op = xform.AddScaleOp()
+
+    for entry in samples:
+        t = float(entry["time"])
+        if "translate" in entry:
+            v = entry["translate"]
+            translate_op.Set(Gf.Vec3d(*[float(c) for c in v[:3]]), t)
+        if "rotate" in entry:
+            v = entry["rotate"]
+            rotate_op.Set(Gf.Vec3f(*[float(c) for c in v[:3]]), t)
+        if "scale" in entry:
+            v = entry["scale"]
+            scale_op.Set(Gf.Vec3f(*[float(c) for c in v[:3]]), t)
+
+    stage.GetRootLayer().Save()
+    return {
+        "stage_file": str(path),
+        "prim_path": prim_path,
+        "sample_count": len(samples),
+        "runtime": "pxr",
+    }
+
+
+def author_attribute_samples(
+    stage_file: str,
+    prim_path: str,
+    attribute_name: str,
+    samples: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Write time samples on an arbitrary attribute.
+
+    ``samples`` is a list of dicts::
+
+        [
+            {"time": 1.0, "value": 0.5},
+            {"time": 24.0, "value": 1.0},
+        ]
+    """
+    path = _existing_file(stage_file)
+    prim_path = _normalize_prim_path(prim_path)
+
+    from pxr import Sdf  # type: ignore
+
+    stage = _open_stage(path)
+    prim = stage.GetPrimAtPath(prim_path)
+    if not prim or not prim.IsValid():
+        raise OpenUsdError(f"Prim not found: {prim_path}")
+
+    attr = prim.GetAttribute(attribute_name)
+    if not attr:
+        attr = prim.CreateAttribute(attribute_name, Sdf.ValueTypeNames.Float)
+
+    for entry in samples:
+        t = float(entry["time"])
+        attr.Set(entry["value"], t)
+
+    stage.GetRootLayer().Save()
+    return {
+        "stage_file": str(path),
+        "prim_path": prim_path,
+        "attribute_name": attribute_name,
+        "sample_count": len(samples),
+        "runtime": "pxr",
+    }
+
+
+# --- openusd-composition ----------------------------------------------------
+
+
+def add_sublayer(stage_file: str, sublayer_path: str, position: Optional[int] = None) -> Dict[str, Any]:
+    """Add a sublayer to the stage's root layer."""
+    path = _existing_file(stage_file)
+    sublayer = Path(sublayer_path).expanduser()
+
+    stage = _open_stage(path)
+    root_layer = stage.GetRootLayer()
+    sublayer_ref = _relative_asset_path(path.parent, sublayer)
+    if position is not None:
+        root_layer.subLayerPaths.insert(position, sublayer_ref)
+    else:
+        root_layer.subLayerPaths.append(sublayer_ref)
+    root_layer.Save()
+    return {
+        "stage_file": str(path),
+        "sublayer_path": sublayer_ref,
+        "position": position if position is not None else len(root_layer.subLayerPaths) - 1,
+        "runtime": "pxr",
+    }
+
+
+def add_payload(stage_file: str, prim_path: str, payload_path: str) -> Dict[str, Any]:
+    """Add a payload arc on a prim."""
+    path = _existing_file(stage_file)
+    prim_path = _normalize_prim_path(prim_path)
+    payload = Path(payload_path).expanduser()
+
+    stage = _open_stage(path)
+    prim = stage.DefinePrim(prim_path, "Xform")
+    payload_ref = _relative_asset_path(path.parent, payload)
+    prim.GetPayloads().AddPayload(payload_ref)
+    stage.GetRootLayer().Save()
+    return {
+        "stage_file": str(path),
+        "prim_path": prim_path,
+        "payload_path": payload_ref,
+        "runtime": "pxr",
+    }
+
+
+def add_variant_set(stage_file: str, prim_path: str, variant_set_name: str) -> Dict[str, Any]:
+    """Create a variant set on a prim."""
+    path = _existing_file(stage_file)
+    prim_path = _normalize_prim_path(prim_path)
+
+    stage = _open_stage(path)
+    prim = stage.GetPrimAtPath(prim_path)
+    if not prim or not prim.IsValid():
+        raise OpenUsdError(f"Prim not found: {prim_path}")
+    prim.GetVariantSets().AddVariantSet(variant_set_name)
+    stage.GetRootLayer().Save()
+    return {
+        "stage_file": str(path),
+        "prim_path": prim_path,
+        "variant_set_name": variant_set_name,
+        "runtime": "pxr",
+    }
+
+
+def set_variant_selection(
+    stage_file: str, prim_path: str, variant_set_name: str, variant_name: str
+) -> Dict[str, Any]:
+    """Set the active variant selection for a variant set on a prim."""
+    path = _existing_file(stage_file)
+    prim_path = _normalize_prim_path(prim_path)
+
+    stage = _open_stage(path)
+    prim = stage.GetPrimAtPath(prim_path)
+    if not prim or not prim.IsValid():
+        raise OpenUsdError(f"Prim not found: {prim_path}")
+    variant_set = prim.GetVariantSets().GetVariantSet(variant_set_name)
+    variant_set.SetVariantSelection(variant_name)
+    stage.GetRootLayer().Save()
+    return {
+        "stage_file": str(path),
+        "prim_path": prim_path,
+        "variant_set_name": variant_set_name,
+        "variant_name": variant_name,
+        "runtime": "pxr",
+    }
