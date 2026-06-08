@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.1](https://github.com/dcc-mcp/dcc-mcp-openusd/compare/v0.4.0...v0.4.1) (2026-06-08)
+
+
+### Bug Fixes
+
+* set standalone_main_thread=True for OpenUSD headless server ([4d12257](https://github.com/dcc-mcp/dcc-mcp-openusd/commit/4d12257fcab2395dadade8e2768617a966a558cb))
+
 ## [0.4.0](https://github.com/dcc-mcp/dcc-mcp-openusd/compare/v0.3.0...v0.4.0) (2026-06-08)
 
 
