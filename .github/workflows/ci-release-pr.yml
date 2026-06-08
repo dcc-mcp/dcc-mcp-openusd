@@ -83,6 +83,7 @@ jobs:
               'Cargo.toml',
               'Cargo.lock',
               'version.py',
+              '__version__.py',
               '__init__.py',
             ];
             const disallowed = names.filter(
