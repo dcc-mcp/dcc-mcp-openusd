@@ -18,9 +18,7 @@ def main() -> int:
     args = parser.parse_args()
 
     try:
-        result = set_variant_selection(
-            args.stage_file, args.prim_path, args.variant_set_name, args.variant_name
-        )
+        result = set_variant_selection(args.stage_file, args.prim_path, args.variant_set_name, args.variant_name)
         print(json.dumps({"success": True, "message": "Variant selection set", **result}))
         return 0
     except OpenUsdError as exc:

@@ -20,7 +20,8 @@ def main() -> int:
 
     try:
         result = create_camera(
-            args.stage_file, args.prim_path,
+            args.stage_file,
+            args.prim_path,
             focal_length=args.focal_length,
             focus_distance=args.focus_distance,
             f_stop=args.f_stop,

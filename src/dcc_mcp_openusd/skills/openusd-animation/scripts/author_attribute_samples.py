@@ -24,9 +24,7 @@ def main() -> int:
         return 1
 
     try:
-        result = author_attribute_samples(
-            args.stage_file, args.prim_path, args.attribute_name, samples
-        )
+        result = author_attribute_samples(args.stage_file, args.prim_path, args.attribute_name, samples)
         print(json.dumps({"success": True, "message": "Attribute samples authored", **result}))
         return 0
     except OpenUsdError as exc:
