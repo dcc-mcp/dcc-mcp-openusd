@@ -26,10 +26,12 @@ classifiers = [
 
 dependencies = [
     "dcc-mcp-core>=0.18.9,<1.0.0",
-    "usd-core>=24.11,<27",
 ]
 
 [project.optional-dependencies]
+openusd = [
+    "usd-core>=24.11,<27",
+]
 daemon = [
     "dcc-mcp-server>=0.18.0,<1.0.0",
 ]
@@ -97,6 +99,7 @@ known-first-party = ["dcc_mcp_openusd"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["S101"]
+"tests/e2e/*.py" = ["E402"]
 "src/dcc_mcp_openusd/skills/**/scripts/*.py" = ["E402"]
 
 [tool.ruff.format]
