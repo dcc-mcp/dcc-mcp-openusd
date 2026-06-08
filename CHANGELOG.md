@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.4.0](https://github.com/dcc-mcp/dcc-mcp-openusd/compare/v0.3.0...v0.4.0) (2026-06-08)
+
+
+### Features
+
+* add e2e golden-path tests, CI matrix, and pxr runtime documentation ([c5f7955](https://github.com/dcc-mcp/dcc-mcp-openusd/commit/c5f795588349de0093370cd5df2d08a5b8255793))
+
+
+### Bug Fixes
+
+* move pxr imports after _require_pxr gate in pxr-required functions ([83e8ad5](https://github.com/dcc-mcp/dcc-mcp-openusd/commit/83e8ad59b9d9a51aa3d1f6c05022e9beaf03ad15))
+
 ## [0.3.0](https://github.com/dcc-mcp/dcc-mcp-openusd/compare/v0.2.2...v0.3.0) (2026-06-08)
 
 
