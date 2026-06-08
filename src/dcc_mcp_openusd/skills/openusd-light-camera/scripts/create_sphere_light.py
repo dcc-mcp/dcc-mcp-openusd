@@ -26,7 +26,8 @@ def main() -> int:
 
     try:
         result = create_sphere_light(
-            args.stage_file, args.prim_path,
+            args.stage_file,
+            args.prim_path,
             radius=args.radius,
             intensity=args.intensity,
             color=_parse_float_list(args.color),
