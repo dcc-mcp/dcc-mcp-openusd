@@ -646,9 +646,9 @@ def create_material(stage_file: str, prim_path: str) -> Dict[str, Any]:
     path = _existing_file(stage_file)
     prim_path = _normalize_prim_path(prim_path)
 
+    stage = _open_stage(path)
     from pxr import UsdShade  # type: ignore
 
-    stage = _open_stage(path)
     material = UsdShade.Material.Define(stage, prim_path)
     stage.GetRootLayer().Save()
     return {
@@ -668,9 +668,9 @@ def create_preview_surface(
     path = _existing_file(stage_file)
     material_path = _normalize_prim_path(material_path)
 
+    stage = _open_stage(path)
     from pxr import Sdf, UsdShade  # type: ignore
 
-    stage = _open_stage(path)
     material = UsdShade.Material.Get(stage, material_path)
     if not material:
         raise OpenUsdError(f"Material not found: {material_path}")
@@ -701,9 +701,9 @@ def bind_material(stage_file: str, prim_path: str, material_path: str) -> Dict[s
     prim_path = _normalize_prim_path(prim_path)
     material_path = _normalize_prim_path(material_path)
 
+    stage = _open_stage(path)
     from pxr import UsdShade  # type: ignore
 
-    stage = _open_stage(path)
     prim = stage.GetPrimAtPath(prim_path)
     if not prim or not prim.IsValid():
         raise OpenUsdError(f"Prim not found: {prim_path}")
@@ -735,9 +735,9 @@ def create_camera(
     path = _existing_file(stage_file)
     prim_path = _normalize_prim_path(prim_path)
 
+    stage = _open_stage(path)
     from pxr import UsdGeom  # type: ignore
 
-    stage = _open_stage(path)
     camera = UsdGeom.Camera.Define(stage, prim_path)
     camera.CreateFocalLengthAttr().Set(float(focal_length))
     camera.CreateFocusDistanceAttr().Set(float(focus_distance))
@@ -761,9 +761,9 @@ def create_distant_light(
     path = _existing_file(stage_file)
     prim_path = _normalize_prim_path(prim_path)
 
+    stage = _open_stage(path)
     from pxr import Gf, UsdLux  # type: ignore
 
-    stage = _open_stage(path)
     light = UsdLux.DistantLight.Define(stage, prim_path)
     light.CreateAngleAttr().Set(float(angle))
     light.CreateIntensityAttr().Set(float(intensity))
@@ -788,9 +788,9 @@ def create_sphere_light(
     path = _existing_file(stage_file)
     prim_path = _normalize_prim_path(prim_path)
 
+    stage = _open_stage(path)
     from pxr import Gf, UsdLux  # type: ignore
 
-    stage = _open_stage(path)
     light = UsdLux.SphereLight.Define(stage, prim_path)
     light.CreateRadiusAttr().Set(float(radius))
     light.CreateIntensityAttr().Set(float(intensity))
@@ -815,9 +815,9 @@ def set_transform(
     path = _existing_file(stage_file)
     prim_path = _normalize_prim_path(prim_path)
 
+    stage = _open_stage(path)
     from pxr import Gf, UsdGeom  # type: ignore
 
-    stage = _open_stage(path)
     prim = stage.GetPrimAtPath(prim_path)
     if not prim or not prim.IsValid():
         raise OpenUsdError(f"Prim not found: {prim_path}")
@@ -880,9 +880,9 @@ def author_xform_samples(
     path = _existing_file(stage_file)
     prim_path = _normalize_prim_path(prim_path)
 
+    stage = _open_stage(path)
     from pxr import Gf, UsdGeom  # type: ignore
 
-    stage = _open_stage(path)
     prim = stage.GetPrimAtPath(prim_path)
     if not prim or not prim.IsValid():
         raise OpenUsdError(f"Prim not found: {prim_path}")
@@ -931,9 +931,9 @@ def author_attribute_samples(
     path = _existing_file(stage_file)
     prim_path = _normalize_prim_path(prim_path)
 
+    stage = _open_stage(path)
     from pxr import Sdf  # type: ignore
 
-    stage = _open_stage(path)
     prim = stage.GetPrimAtPath(prim_path)
     if not prim or not prim.IsValid():
         raise OpenUsdError(f"Prim not found: {prim_path}")
