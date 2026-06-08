@@ -57,6 +57,7 @@ class OpenUsdServerOptions:
             enable_job_persistence=self.enable_job_persistence,
             enable_telemetry=self.enable_telemetry,
             dcc_pid=self.dcc_pid,
+            standalone_main_thread=True,
         )
 
 
