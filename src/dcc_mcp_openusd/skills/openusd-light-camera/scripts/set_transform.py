@@ -30,7 +30,8 @@ def main() -> int:
 
     try:
         result = set_transform(
-            args.stage_file, args.prim_path,
+            args.stage_file,
+            args.prim_path,
             translate=_parse_float_list(args.translate),
             rotate=_parse_float_list(args.rotate),
             scale=_parse_float_list(args.scale),

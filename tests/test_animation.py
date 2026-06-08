@@ -32,9 +32,7 @@ class TestAnimationPxrMissing:
         from dcc_mcp_openusd.runtime import OpenUsdError, author_attribute_samples
 
         with pytest.raises(OpenUsdError, match="pxr runtime"):
-            author_attribute_samples(
-                self._make_stage(tmp_path), "/World/X", "myFloat", [{"time": 1, "value": 0.5}]
-            )
+            author_attribute_samples(self._make_stage(tmp_path), "/World/X", "myFloat", [{"time": 1, "value": 0.5}])
 
 
 @pytest.mark.skipif(not _HAS_PXR, reason="pxr not available")

@@ -26,7 +26,8 @@ def main() -> int:
 
     try:
         result = create_distant_light(
-            args.stage_file, args.prim_path,
+            args.stage_file,
+            args.prim_path,
             angle=args.angle,
             intensity=args.intensity,
             color=_parse_float_list(args.color),
