@@ -15,11 +15,51 @@ pip install dcc-mcp-openusd
 
 This release train requires `dcc-mcp-core>=0.18.7`.
 
+The base install operates in **text-fallback mode**: it reads and writes USDA
+text without requiring the Pixar USD runtime. This mode is suitable for
+lightweight agents, CI gates, and environments where native USD libraries
+are unavailable.
+
 For full OpenUSD runtime behavior, install the optional Pixar USD bindings:
 
 ```bash
 pip install "dcc-mcp-openusd[openusd]"
 ```
+
+The `[openusd]` extra pulls in `usd-core>=24.11` (the Pixar open-source USD
+Python bindings, importable as `pxr`). With pxr installed, all stage
+authoring, material binding, camera/light definition, time-sampled animation,
+and composition-arc operations go through the native USD runtime.
+
+### Runtime mode detection
+
+```python
+from dcc_mcp_openusd.runtime import detect_runtime
+
+runtime = detect_runtime()
+print(runtime.has_pxr)   # True when pxr is installed
+print(runtime.version)   # e.g. "24.11"
+```
+
+Every public function returns a `"runtime"` field in its result dict —
+`"pxr"` when the native runtime was used, `"text-fallback"` otherwise.
+
+### Feature boundary
+
+| Feature | Text-fallback | pxr runtime |
+| --- | --- | --- |
+| `create_stage`, `create_project` | USDA text | Native `Usd.Stage` |
+| `list_stage`, `define_xform`, `define_prim` | USDA parse + insert | Native API |
+| `add_reference`, `set_xform_ops` | USDA text | Native API |
+| `validate_stage`, `snapshot_stage`, `package_usdz` | USDA checks | Native validation |
+| Material binding (`UsdShade`) | — | Requires pxr |
+| Camera / Light (`UsdGeomCamera`, `UsdLux`) | — | Requires pxr |
+| Time-sampled animation | — | Requires pxr |
+| Sublayer / payload composition | — | Requires pxr |
+
+Advanced features that cannot be expressed through text-fallback raise
+`OpenUsdError("... requires the Pixar USD (pxr) package. Install it with: pip install usd-core")`
+when pxr is absent.
 
 ## Run
 
@@ -61,11 +101,20 @@ and packaging workflows.
 ## Development
 
 ```bash
+# Minimal setup (text-fallback, fast CI gate)
 pip install -e ".[dev]"
-pytest
+pytest tests/ --ignore=tests/e2e
+
+# Full setup (pxr runtime, material/light/animation/composition tests)
+pip install -e ".[dev,openusd]"
+pytest tests/e2e/ -v
 ruff check src tests tools
 python -m build
 ```
+
+The CI matrix enforces both modes:
+- **`test-minimal`** — no pxr, runs unit tests + contract test (text-fallback baseline)
+- **`test-openusd`** — with pxr, runs the e2e golden-path suite
 
 ## Release
 
