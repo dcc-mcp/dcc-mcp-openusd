@@ -63,6 +63,46 @@ jobs:
       - name: Run unit tests
         run: python -m pytest
 
+  test-minimal:
+    name: Minimal (no pxr) — Unit + Contract
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Install package with dev deps (no pxr)
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+      - name: Verify pxr is absent
+        shell: bash
+        run: |
+          python -c "from dcc_mcp_openusd.runtime import detect_runtime; rt=detect_runtime(); assert not rt.has_pxr, 'pxr should be absent in minimal job'; print('pxr absent — OK')"
+      - name: Run unit tests + contract test
+        run: python -m pytest tests/ --ignore=tests/e2e
+
+  test-openusd:
+    name: OpenUSD (with pxr) — E2E Golden Paths
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Install package with dev + openusd deps
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev,openusd]"
+      - name: Verify pxr is present
+        shell: bash
+        run: |
+          python -c "from dcc_mcp_openusd.runtime import detect_runtime; rt=detect_runtime(); assert rt.has_pxr, 'pxr must be present in openusd job'; print(f'pxr present — {rt.version}')"
+      - name: Run e2e golden path tests
+        run: python -m pytest tests/e2e/ -v
+
   build:
     name: Build Wheel and Sdist
     runs-on: ubuntu-latest
