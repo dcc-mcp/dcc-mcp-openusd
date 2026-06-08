@@ -1018,9 +1018,7 @@ def add_variant_set(stage_file: str, prim_path: str, variant_set_name: str) -> D
     }
 
 
-def set_variant_selection(
-    stage_file: str, prim_path: str, variant_set_name: str, variant_name: str
-) -> Dict[str, Any]:
+def set_variant_selection(stage_file: str, prim_path: str, variant_set_name: str, variant_name: str) -> Dict[str, Any]:
     """Set the active variant selection for a variant set on a prim."""
     path = _existing_file(stage_file)
     prim_path = _normalize_prim_path(prim_path)
