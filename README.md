@@ -13,7 +13,7 @@ stages, and package USDZ-like archives. It is designed to plug into the
 pip install dcc-mcp-openusd
 ```
 
-This release train requires `dcc-mcp-core>=0.18.7`.
+This release train requires `dcc-mcp-core>=0.18.34`.
 
 The base install operates in **text-fallback mode**: it reads and writes USDA
 text without requiring the Pixar USD runtime. This mode is suitable for
@@ -75,13 +75,17 @@ http://127.0.0.1:8765/mcp
 
 ## Bundled Skills
 
-The first version ships three bundled skills:
+The package ships seven bundled skills:
 
 | Skill | Purpose |
 | --- | --- |
 | `openusd-project` | Create self-contained project folders and snapshots. |
-| `openusd-stage` | Create stages, list prims, define xforms, and add references. |
+| `openusd-stage` | Create stages, list prims, define xforms, set xform ops, modify stage metadata, and add references. |
 | `openusd-validate` | Validate stage invariants and package a USDZ-style archive. |
+| `openusd-material` | Create UsdShadeMaterial prims, attach UsdPreviewSurface shaders, and bind materials to geometry. |
+| `openusd-light-camera` | Create cameras (UsdGeomCamera) and lights (DistantLight, SphereLight) with transforms. |
+| `openusd-animation` | Set stage time codes and author translate/rotate/scale time samples. |
+| `openusd-composition` | Add sublayers, payloads, variant sets, and variant selections for multi-layer scenes. |
 
 Agents should follow the normal DCC-MCP flow:
 
