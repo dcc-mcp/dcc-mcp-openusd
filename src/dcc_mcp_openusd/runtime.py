@@ -14,7 +14,10 @@ import time
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
+
+if TYPE_CHECKING:
+    from dcc_mcp_core.asset_import import AssetDescriptor, ImportToSceneRequest, ImportToSceneResult
 
 
 class OpenUsdError(RuntimeError):
@@ -1108,7 +1111,8 @@ def asset_source(stage_file: str, asset_id: Optional[str] = None) -> "AssetDescr
                     variant_sets = list(default_prim.GetVariantSets().GetNames())
         except Exception:
             pass
-    else:
+    elif fmt != AssetFormat.USDZ:
+        # USDZ is a binary zip archive — skip text parsing
         text = path.read_text(encoding="utf-8")
         axis_match = re.search(r'upAxis\s*=\s*"([^"]+)"', text)
         if axis_match:
@@ -1117,6 +1121,14 @@ def asset_source(stage_file: str, asset_id: Optional[str] = None) -> "AssetDescr
         if mpu_match:
             try:
                 meters_per_unit = float(mpu_match.group(1))
+                if abs(meters_per_unit - 1.0) < 1e-9:
+                    unit_hint = UnitHint.METER
+                elif abs(meters_per_unit - 0.01) < 1e-9:
+                    unit_hint = UnitHint.CENTIMETER
+                elif abs(meters_per_unit - 0.0254) < 1e-9:
+                    unit_hint = UnitHint.INCH
+                else:
+                    unit_hint = UnitHint.UNITLESS
             except ValueError:
                 pass
 
@@ -1299,8 +1311,13 @@ def _pick_usd_variant(descriptor: "AssetDescriptor") -> Optional[Any]:
 
 
 def _detect_composition_arcs(path: Path) -> List[str]:
-    """Return a list of composition arc types present in the USD file text."""
+    """Return a list of composition arc types present in the USD file text.
+
+    USDZ files are zip archives (binary); text scanning is skipped for them.
+    """
     arcs: List[str] = []
+    if path.suffix.lower() == ".usdz":
+        return arcs
     try:
         text = path.read_text(encoding="utf-8")
     except Exception:

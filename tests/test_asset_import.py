@@ -7,7 +7,6 @@ dcc_mcp_core.asset_import — the module that PIP-1924 (Guido) authored.
 from __future__ import annotations
 
 import pytest
-
 from dcc_mcp_core.asset_import import (
     AssetDescriptor,
     AssetFileVariant,
@@ -18,13 +17,13 @@ from dcc_mcp_core.asset_import import (
     PlacementHint,
     UnitHint,
 )
+
 from dcc_mcp_openusd.runtime import (
     asset_source,
     create_stage,
     import_to_scene,
     list_stage,
 )
-
 
 # ---------------------------------------------------------------------------
 # asset_source — builds an AssetDescriptor from a USD file
@@ -156,7 +155,6 @@ def test_import_to_scene_custom_prim_path(tmp_path):
 
 
 def test_import_to_scene_payload_arc(tmp_path):
-    from dcc_mcp_openusd.runtime import OpenUsdError
 
     asset_stage = tmp_path / "heavy.usda"
     create_stage(str(asset_stage), name="heavy")
