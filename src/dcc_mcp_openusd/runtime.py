@@ -1037,3 +1037,283 @@ def set_variant_selection(stage_file: str, prim_path: str, variant_set_name: str
         "variant_name": variant_name,
         "runtime": "pxr",
     }
+
+
+# --- asset_import contract adapters -----------------------------------------
+
+
+def asset_source(stage_file: str, asset_id: Optional[str] = None) -> "AssetDescriptor":
+    """Expose a USD/USDZ stage as an AssetDescriptor for cross-DCC consumption.
+
+    Reads stage metadata (upAxis, metersPerUnit) from the file when pxr is
+    available; falls back to USDA text parsing otherwise.  The returned
+    descriptor always has at least one ``AssetFileVariant`` pointing to the
+    resolved stage file.
+
+    Parameters
+    ----------
+    stage_file:
+        Path to a ``.usd``, ``.usda``, ``.usdc``, or ``.usdz`` file.
+    asset_id:
+        Logical identifier for the asset.  Defaults to the stem of
+        *stage_file* when not provided.
+
+    Returns
+    -------
+    AssetDescriptor
+        A populated contract object ready for other DCC adapters to consume.
+    """
+    from dcc_mcp_core.asset_import import (  # type: ignore
+        AssetDescriptor,
+        AssetFileVariant,
+        AssetFormat,
+        AxisHint,
+        UnitHint,
+    )
+
+    path = _existing_file(stage_file)
+    suffix = path.suffix.lower().lstrip(".")
+    fmt = AssetFormat.USDZ if suffix == "usdz" else AssetFormat.USD
+
+    resolved_id = asset_id or path.stem
+
+    # Defaults — overridden by stage metadata when pxr is available
+    up_axis = AxisHint.Y
+    meters_per_unit = 1.0
+    unit_hint = UnitHint.METER
+    variant_sets: List[str] = []
+
+    if detect_runtime().has_pxr:
+        try:
+            from pxr import Usd, UsdGeom  # type: ignore
+
+            stage = Usd.Stage.Open(str(path))
+            if stage is not None:
+                raw_axis = UsdGeom.GetStageUpAxis(stage)
+                up_axis = raw_axis.lower() if raw_axis else AxisHint.Y
+                mpu = UsdGeom.GetStageMetersPerUnit(stage)
+                if mpu:
+                    meters_per_unit = float(mpu)
+                    if abs(meters_per_unit - 1.0) < 1e-9:
+                        unit_hint = UnitHint.METER
+                    elif abs(meters_per_unit - 0.01) < 1e-9:
+                        unit_hint = UnitHint.CENTIMETER
+                    elif abs(meters_per_unit - 0.0254) < 1e-9:
+                        unit_hint = UnitHint.INCH
+                    else:
+                        unit_hint = UnitHint.UNITLESS
+                # Collect variant set names from the default prim
+                default_prim = stage.GetDefaultPrim()
+                if default_prim and default_prim.IsValid():
+                    variant_sets = list(default_prim.GetVariantSets().GetNames())
+        except Exception:
+            pass
+    else:
+        text = path.read_text(encoding="utf-8")
+        axis_match = re.search(r'upAxis\s*=\s*"([^"]+)"', text)
+        if axis_match:
+            up_axis = axis_match.group(1).lower()
+        mpu_match = re.search(r"metersPerUnit\s*=\s*([0-9.e+-]+)", text)
+        if mpu_match:
+            try:
+                meters_per_unit = float(mpu_match.group(1))
+            except ValueError:
+                pass
+
+    extra: Dict[str, Any] = {}
+    if variant_sets:
+        extra["variant_sets"] = variant_sets
+    extra["composition_arcs"] = _detect_composition_arcs(path)
+
+    variant = AssetFileVariant(
+        local_path=str(path),
+        format=fmt,
+        preferred=True,
+    )
+    descriptor = AssetDescriptor(
+        asset_id=resolved_id,
+        variants=[variant],
+        up_axis=up_axis,
+        meters_per_unit=meters_per_unit,
+        unit_hint=unit_hint,
+        extra=extra,
+    )
+    descriptor.validate()
+    return descriptor
+
+
+def import_to_scene(
+    stage_file: str,
+    request: "ImportToSceneRequest",
+    target_prim_path: Optional[str] = None,
+) -> "ImportToSceneResult":
+    """Import an asset described by *request* into a USD stage.
+
+    Selects the preferred USD/USDZ variant from the descriptor and wires it
+    into the stage using the most appropriate USD composition arc:
+
+    - **reference** (default): standard asset assembly
+    - **payload**: deferred loading for heavy assets (set
+      ``request.extra["usd_arc"] = "payload"`` to activate)
+    - **sublayer**: merge whole layers (set
+      ``request.extra["usd_arc"] = "sublayer"``)
+
+    Placement hints (translate/rotate/scale) are applied via
+    ``UsdGeom.XformCommonAPI`` when pxr is available.
+
+    Parameters
+    ----------
+    stage_file:
+        The receiving USD stage file path.
+    request:
+        Populated ``ImportToSceneRequest`` from the asset_import contract.
+    target_prim_path:
+        Override the prim path in the stage.  Defaults to
+        ``/World/<asset_id>``.
+
+    Returns
+    -------
+    ImportToSceneResult
+        Success flag, list of imported prim paths, and any non-fatal warnings.
+    """
+    from dcc_mcp_core.asset_import import (  # type: ignore
+        AssetFormat,
+        ImportToSceneResult,
+        ImportWarning,
+        ImportWarningCode,
+    )
+
+    descriptor = request.descriptor
+    warnings: List[ImportWarning] = []
+
+    # Resolve the best USD/USDZ variant
+    usd_variant = _pick_usd_variant(descriptor)
+    if usd_variant is None:
+        return ImportToSceneResult(
+            success=False,
+            error_message="No USD or USDZ variant found in AssetDescriptor",
+        )
+
+    asset_path = usd_variant.local_path
+    arc = request.extra.get("usd_arc", "reference")
+
+    prim_name = re.sub(r"[^A-Za-z0-9_]", "_", descriptor.asset_id) or "Asset"
+    prim_path = target_prim_path or f"/World/{prim_name}"
+    prim_path = _normalize_prim_path(prim_path)
+
+    if request.skip_existing:
+        try:
+            existing = list_stage(stage_file)
+            existing_paths = {p["path"] for p in existing.get("prims", [])}
+            if prim_path in existing_paths:
+                return ImportToSceneResult(
+                    success=True,
+                    imported_nodes=[prim_path],
+                    warnings=[
+                        ImportWarning(
+                            code=ImportWarningCode.UNKNOWN,
+                            message=f"Prim {prim_path} already exists; skipped",
+                        )
+                    ],
+                )
+        except OpenUsdError:
+            pass
+
+    try:
+        if arc == "sublayer":
+            add_sublayer(stage_file, asset_path)
+            imported_nodes = [prim_path]
+        elif arc == "payload":
+            add_payload(stage_file, prim_path, asset_path)
+            imported_nodes = [prim_path]
+        else:
+            add_reference(stage_file, prim_path, asset_path)
+            imported_nodes = [prim_path]
+    except OpenUsdError as exc:
+        return ImportToSceneResult(success=False, error_message=str(exc))
+
+    # Apply placement hints
+    if request.placement is not None and arc != "sublayer":
+        placement = request.placement
+        if detect_runtime().has_pxr and (placement.translate or placement.rotate or placement.scale):
+            try:
+                set_transform(
+                    stage_file,
+                    prim_path,
+                    translate=placement.translate,
+                    rotate=placement.rotate,
+                    scale=placement.scale,
+                )
+            except OpenUsdError as exc:
+                warnings.append(
+                    ImportWarning(
+                        code=ImportWarningCode.UNKNOWN,
+                        message=f"Placement hint could not be applied: {exc}",
+                    )
+                )
+        elif not detect_runtime().has_pxr and (placement.translate or placement.rotate or placement.scale):
+            try:
+                set_xform_ops(
+                    stage_file,
+                    prim_path,
+                    translate=placement.translate,
+                    rotate=placement.rotate,
+                    scale=placement.scale,
+                )
+            except OpenUsdError as exc:
+                warnings.append(
+                    ImportWarning(
+                        code=ImportWarningCode.UNKNOWN,
+                        message=f"Placement hint could not be applied (text-fallback): {exc}",
+                    )
+                )
+
+    if usd_variant.format == AssetFormat.USDZ:
+        warnings.append(
+            ImportWarning(
+                code=ImportWarningCode.UNSUPPORTED_FEATURE,
+                message="USDZ assets are referenced by path; texture unpacking is not performed",
+            )
+        )
+
+    return ImportToSceneResult(
+        success=True,
+        imported_nodes=imported_nodes,
+        warnings=warnings,
+    )
+
+
+# ── asset_import internal helpers ──
+
+
+def _pick_usd_variant(descriptor: "AssetDescriptor") -> Optional[Any]:
+    """Return the best USD or USDZ AssetFileVariant from a descriptor."""
+    from dcc_mcp_core.asset_import import AssetFormat  # type: ignore
+
+    usd_formats = {AssetFormat.USD, AssetFormat.USDZ}
+    preferred = [v for v in descriptor.variants if v.preferred and v.format in usd_formats]
+    if preferred:
+        return preferred[0]
+    fallback = [v for v in descriptor.variants if v.format in usd_formats]
+    return fallback[0] if fallback else None
+
+
+def _detect_composition_arcs(path: Path) -> List[str]:
+    """Return a list of composition arc types present in the USD file text."""
+    arcs: List[str] = []
+    try:
+        text = path.read_text(encoding="utf-8")
+    except Exception:
+        return arcs
+    checks = {
+        "reference": r"\breferences\s*=",
+        "payload": r"\bpayload\s*=",
+        "sublayer": r"\bsubLayers\s*=",
+        "variant": r"\bvariantSets\s*=",
+        "inherits": r"\binherits\s*=",
+        "specializes": r"\bspecializes\s*=",
+    }
+    for arc_name, pattern in checks.items():
+        if re.search(pattern, text):
+            arcs.append(arc_name)
+    return arcs
