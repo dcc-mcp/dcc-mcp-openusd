@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.5.0](https://github.com/dcc-mcp/dcc-mcp-openusd/compare/v0.4.1...v0.5.0) (2026-06-21)
+
+
+### Features
+
+* implement asset_source() and import_to_scene() for asset_import contract ([a86ee16](https://github.com/dcc-mcp/dcc-mcp-openusd/commit/a86ee16ede7cfca8afe14a2d8eeffa24fdcdc946))
+* implement asset_source() and import_to_scene() for asset_import contract (PIP-1925) ([ab21645](https://github.com/dcc-mcp/dcc-mcp-openusd/commit/ab21645c967fbc397b9ed970fa67de7a501dd2cb))
+
+
+### Bug Fixes
+
+* resolve CI failures in asset_import text-fallback path ([0e4492c](https://github.com/dcc-mcp/dcc-mcp-openusd/commit/0e4492c13964a2a06b9887e1ecbe479f530911cc))
+* resolve merge conflict in pyproject.toml, bump dcc-mcp-core to &gt;=0.18.34 ([a838ac0](https://github.com/dcc-mcp/dcc-mcp-openusd/commit/a838ac03702d1cdc5bb0446add0e14df4c6038cd))
+
+
+### Documentation
+
+* sync README and skill index with all 7 bundled skills, fix version pin ([#29](https://github.com/dcc-mcp/dcc-mcp-openusd/issues/29)) ([85e662b](https://github.com/dcc-mcp/dcc-mcp-openusd/commit/85e662b2c0ff5dbeadd1849a7c9edd50fdf80cc0))
+
 ## [0.4.1](https://github.com/dcc-mcp/dcc-mcp-openusd/compare/v0.4.0...v0.4.1) (2026-06-08)
 
 
