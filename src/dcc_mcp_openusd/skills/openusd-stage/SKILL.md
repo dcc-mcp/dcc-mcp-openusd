@@ -2,7 +2,9 @@
 name: openusd-stage
 description: >-
   Domain skill for authoring and inspecting OpenUSD stages. Create a stage,
-  list prims, define Xform prims, and add reference arcs to external assets.
+  list prims, define Xform prims, set xform operations (translate/rotate/scale),
+  modify stage metadata (upAxis, metersPerUnit, framesPerSecond), and add
+  reference arcs to external assets.
 license: MIT
 compatibility: "Python 3.9+; dcc-mcp-core 0.18.7+; optional usd-core for full OpenUSD runtime"
 allowed-tools: Bash Read Write
