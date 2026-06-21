@@ -20,6 +20,11 @@ text without requiring the Pixar USD runtime. This mode is suitable for
 lightweight agents, CI gates, and environments where native USD libraries
 are unavailable.
 
+The base install operates in **text-fallback mode**: it reads and writes USDA
+text without requiring the Pixar USD runtime. This mode is suitable for
+lightweight agents, CI gates, and environments where native USD libraries
+are unavailable.
+
 For full OpenUSD runtime behavior, install the optional Pixar USD bindings:
 
 ```bash
