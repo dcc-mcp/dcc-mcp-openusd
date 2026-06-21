@@ -4,6 +4,7 @@ These tests run without the pxr Pixar USD runtime so they exercise the
 text-fallback path and are fast enough for CI.  The contract objects come from
 dcc_mcp_core.asset_import — the module that PIP-1924 (Guido) authored.
 """
+
 from __future__ import annotations
 
 import pytest
