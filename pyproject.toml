@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "dcc-mcp-openusd"
-version = "0.5.0"
+version = "0.6.0"
 description = "OpenUSD MCP server with daemon runtime — uvx-launchable, defaults to Pixar USD bindings"
 authors = [{ name = "Long Hao", email = "hal.long@outlook.com" }]
 readme = "README.md"
