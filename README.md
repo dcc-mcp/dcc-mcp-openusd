@@ -13,7 +13,7 @@ stages, and package USDZ-like archives. It is designed to plug into the
 pip install dcc-mcp-openusd
 ```
 
-This release train requires `dcc-mcp-core>=0.19.8`.
+This release train requires `dcc-mcp-core>=0.19.9`.
 
 The base install operates in **text-fallback mode**: it reads and writes USDA
 text without requiring the Pixar USD runtime. This mode is suitable for
