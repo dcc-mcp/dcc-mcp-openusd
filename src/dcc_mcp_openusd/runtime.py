@@ -641,6 +641,74 @@ def _open_stage(path: Path):
     return stage
 
 
+def _float3(values: List[float], name: str) -> tuple[float, float, float]:
+    """Validate and normalize a three-component numeric value."""
+    if len(values) != 3:
+        raise OpenUsdError(f"{name} must contain exactly 3 numbers")
+    return tuple(float(value) for value in values)
+
+
+def _unit_float(value: float, name: str) -> float:
+    """Validate a normalized scalar input."""
+    normalized = float(value)
+    if not 0.0 <= normalized <= 1.0:
+        raise OpenUsdError(f"{name} must be between 0 and 1")
+    return normalized
+
+
+def create_points(
+    stage_file: str,
+    prim_path: str,
+    positions: List[List[float]],
+    widths: Optional[List[float]] = None,
+    colors: Optional[List[List[float]]] = None,
+    velocities: Optional[List[List[float]]] = None,
+    ids: Optional[List[int]] = None,
+) -> Dict[str, Any]:
+    """Create a portable UsdGeom.Points FX primitive."""
+    path = _existing_file(stage_file)
+    prim_path = _normalize_prim_path(prim_path)
+    point_count = len(positions)
+    if point_count == 0:
+        raise OpenUsdError("positions must contain at least one point")
+
+    optional_values = {
+        "widths": widths,
+        "colors": colors,
+        "velocities": velocities,
+        "ids": ids,
+    }
+    for name, values in optional_values.items():
+        if values is not None and len(values) != point_count:
+            raise OpenUsdError(f"{name} must contain one value per point")
+
+    stage = _open_stage(path)
+    from pxr import Gf, UsdGeom, Vt  # type: ignore
+
+    points = UsdGeom.Points.Define(stage, prim_path)
+    points.CreatePointsAttr().Set(Vt.Vec3fArray([Gf.Vec3f(*_float3(value, "position")) for value in positions]))
+    if widths is not None:
+        points.CreateWidthsAttr().Set(Vt.FloatArray([float(value) for value in widths]))
+        points.SetWidthsInterpolation(UsdGeom.Tokens.vertex)
+    if colors is not None:
+        primvar = points.CreateDisplayColorPrimvar(UsdGeom.Tokens.vertex)
+        primvar.Set(Vt.Vec3fArray([Gf.Vec3f(*_float3(value, "color")) for value in colors]))
+    if velocities is not None:
+        points.CreateVelocitiesAttr().Set(
+            Vt.Vec3fArray([Gf.Vec3f(*_float3(value, "velocity")) for value in velocities])
+        )
+    if ids is not None:
+        points.CreateIdsAttr().Set(Vt.Int64Array([int(value) for value in ids]))
+
+    stage.GetRootLayer().Save()
+    return {
+        "stage_file": str(path),
+        "prim_path": prim_path,
+        "point_count": point_count,
+        "runtime": "pxr",
+    }
+
+
 # --- openusd-material -------------------------------------------------------
 
 
@@ -666,6 +734,13 @@ def create_preview_surface(
     material_path: str,
     shader_path: Optional[str] = None,
     diffuse_color: Optional[List[float]] = None,
+    metallic: Optional[float] = None,
+    roughness: Optional[float] = None,
+    emissive_color: Optional[List[float]] = None,
+    opacity: Optional[float] = None,
+    clearcoat: Optional[float] = None,
+    clearcoat_roughness: Optional[float] = None,
+    ior: Optional[float] = None,
 ) -> Dict[str, Any]:
     """Create a UsdPreviewSurface shader and connect it to the material's surface output."""
     path = _existing_file(stage_file)
@@ -684,9 +759,25 @@ def create_preview_surface(
 
     shader = UsdShade.Shader.Define(stage, shader_path)
     shader.CreateIdAttr("UsdPreviewSurface")
-    if diffuse_color:
-        color = tuple(float(c) for c in diffuse_color[:3])
-        shader.CreateInput("diffuseColor", Sdf.ValueTypeNames.Color3f).Set(color)
+    if diffuse_color is not None:
+        shader.CreateInput("diffuseColor", Sdf.ValueTypeNames.Color3f).Set(_float3(diffuse_color, "diffuse_color"))
+    scalar_inputs = {
+        "metallic": metallic,
+        "roughness": roughness,
+        "opacity": opacity,
+        "clearcoat": clearcoat,
+        "clearcoatRoughness": clearcoat_roughness,
+    }
+    for input_name, value in scalar_inputs.items():
+        if value is not None:
+            shader.CreateInput(input_name, Sdf.ValueTypeNames.Float).Set(_unit_float(value, input_name))
+    if emissive_color is not None:
+        shader.CreateInput("emissiveColor", Sdf.ValueTypeNames.Color3f).Set(_float3(emissive_color, "emissive_color"))
+    if ior is not None:
+        ior_value = float(ior)
+        if ior_value <= 0:
+            raise OpenUsdError("ior must be greater than 0")
+        shader.CreateInput("ior", Sdf.ValueTypeNames.Float).Set(ior_value)
 
     material.CreateSurfaceOutput().ConnectToSource(shader.ConnectableAPI(), "surface")
     stage.GetRootLayer().Save()
@@ -776,6 +867,48 @@ def create_distant_light(
     return {
         "stage_file": str(path),
         "prim_path": prim_path,
+        "runtime": "pxr",
+    }
+
+
+def create_dome_light(
+    stage_file: str,
+    prim_path: str,
+    texture_file: Optional[str] = None,
+    intensity: float = 1.0,
+    exposure: float = 0.0,
+    color: Optional[List[float]] = None,
+    texture_format: str = "latlong",
+) -> Dict[str, Any]:
+    """Create a DomeLight with an optional HDR environment texture."""
+    path = _existing_file(stage_file)
+    prim_path = _normalize_prim_path(prim_path)
+    if texture_format not in {"automatic", "latlong", "mirroredBall", "angular", "cubeMapVerticalCross"}:
+        raise OpenUsdError("texture_format is not a supported UsdLux dome texture format")
+
+    stage = _open_stage(path)
+    from pxr import Sdf, UsdLux  # type: ignore
+
+    light = UsdLux.DomeLight.Define(stage, prim_path)
+    light.CreateIntensityAttr().Set(float(intensity))
+    light.CreateExposureAttr().Set(float(exposure))
+    if color is not None:
+        light.CreateColorAttr().Set(_float3(color, "color"))
+
+    texture_ref = None
+    if texture_file is not None:
+        texture_path = Path(texture_file).expanduser()
+        if not texture_path.is_file():
+            raise OpenUsdError(f"Dome texture file does not exist: {texture_path.resolve()}")
+        texture_ref = _relative_asset_path(path.parent, texture_path)
+        light.CreateTextureFileAttr().Set(Sdf.AssetPath(texture_ref))
+        light.CreateTextureFormatAttr().Set(texture_format)
+
+    stage.GetRootLayer().Save()
+    return {
+        "stage_file": str(path),
+        "prim_path": prim_path,
+        "texture_file": texture_ref,
         "runtime": "pxr",
     }
 

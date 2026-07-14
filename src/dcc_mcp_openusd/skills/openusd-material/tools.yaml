@@ -45,7 +45,45 @@ tools:
           type: array
           items:
             type: number
+          minItems: 3
+          maxItems: 3
           description: RGB diffuse color as [r, g, b].
+        metallic:
+          type: number
+          minimum: 0.0
+          maximum: 1.0
+          description: Metallic response from 0 to 1.
+        roughness:
+          type: number
+          minimum: 0.0
+          maximum: 1.0
+          description: Surface roughness from 0 to 1.
+        emissive_color:
+          type: array
+          items:
+            type: number
+          minItems: 3
+          maxItems: 3
+          description: RGB emissive color as [r, g, b].
+        opacity:
+          type: number
+          minimum: 0.0
+          maximum: 1.0
+          description: Surface opacity from 0 to 1.
+        clearcoat:
+          type: number
+          minimum: 0.0
+          maximum: 1.0
+          description: Clearcoat weight from 0 to 1.
+        clearcoat_roughness:
+          type: number
+          minimum: 0.0
+          maximum: 1.0
+          description: Clearcoat roughness from 0 to 1.
+        ior:
+          type: number
+          exclusiveMinimum: 0.0
+          description: Index of refraction.
     read_only: false
     destructive: false
     idempotent: true

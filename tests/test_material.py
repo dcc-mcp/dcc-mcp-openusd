@@ -62,9 +62,32 @@ class TestMaterialPxrAvailable:
         create_stage(stage_file)
         define_xform(stage_file, "/World/Geo")
         create_material(stage_file, "/World/Mat")
-        shader_result = create_preview_surface(stage_file, "/World/Mat", diffuse_color=[0.8, 0.2, 0.2])
+        shader_result = create_preview_surface(
+            stage_file,
+            "/World/Mat",
+            diffuse_color=[0.8, 0.2, 0.2],
+            metallic=0.75,
+            roughness=0.18,
+            emissive_color=[0.1, 0.2, 0.8],
+            opacity=0.9,
+            clearcoat=0.4,
+            clearcoat_roughness=0.12,
+            ior=1.46,
+        )
         assert shader_result["shader_path"] == "/World/Mat/Shader"
         assert shader_result["runtime"] == "pxr"
+
+        from pxr import Usd, UsdShade
+
+        stage = Usd.Stage.Open(stage_file)
+        shader = UsdShade.Shader.Get(stage, "/World/Mat/Shader")
+        assert shader.GetInput("metallic").Get() == pytest.approx(0.75)
+        assert shader.GetInput("roughness").Get() == pytest.approx(0.18)
+        assert tuple(shader.GetInput("emissiveColor").Get()) == pytest.approx((0.1, 0.2, 0.8))
+        assert shader.GetInput("opacity").Get() == pytest.approx(0.9)
+        assert shader.GetInput("clearcoat").Get() == pytest.approx(0.4)
+        assert shader.GetInput("clearcoatRoughness").Get() == pytest.approx(0.12)
+        assert shader.GetInput("ior").Get() == pytest.approx(1.46)
 
         bind_result = bind_material(stage_file, "/World/Geo", "/World/Mat")
         assert bind_result["prim_path"] == "/World/Geo"

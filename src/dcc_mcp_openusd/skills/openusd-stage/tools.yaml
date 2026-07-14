@@ -229,3 +229,68 @@ tools:
       on-success:
         - openusd_stage__list_stage
         - openusd_validate__validate_stage
+
+  - name: create_points
+    description: Create a portable UsdGeom.Points primitive for particles, sparks, and point FX.
+    input_schema:
+      type: object
+      required: [stage_file, prim_path, positions]
+      properties:
+        stage_file:
+          type: string
+          description: Stage file to mutate.
+        prim_path:
+          type: string
+          description: Absolute path for the Points prim.
+        positions:
+          type: array
+          minItems: 1
+          items:
+            type: array
+            items:
+              type: number
+            minItems: 3
+            maxItems: 3
+          description: Point positions as an array of [x, y, z].
+        widths:
+          type: array
+          items:
+            type: number
+          description: Optional per-point widths.
+        colors:
+          type: array
+          items:
+            type: array
+            items:
+              type: number
+            minItems: 3
+            maxItems: 3
+          description: Optional per-point display colors.
+        velocities:
+          type: array
+          items:
+            type: array
+            items:
+              type: number
+            minItems: 3
+            maxItems: 3
+          description: Optional per-point velocities.
+        ids:
+          type: array
+          items:
+            type: integer
+          description: Optional stable per-point identifiers.
+    read_only: false
+    destructive: false
+    idempotent: true
+    execution: sync
+    timeout_hint_secs: 30
+    source_file: scripts/create_points.py
+    annotations:
+      read_only_hint: false
+      destructive_hint: false
+      idempotent_hint: true
+    next-tools:
+      on-success:
+        - openusd_stage__list_stage
+        - openusd_validate__validate_stage

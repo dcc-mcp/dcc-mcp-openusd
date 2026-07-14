@@ -118,6 +118,56 @@ tools:
         - openusd_light_camera__set_transform
         - openusd_stage__list_stage
 
+  - name: create_dome_light
+    description: Create a DomeLight with an optional HDR environment texture.
+    input_schema:
+      type: object
+      required: [stage_file, prim_path]
+      properties:
+        stage_file:
+          type: string
+          description: Stage file to mutate.
+        prim_path:
+          type: string
+          description: Absolute prim path for the dome light.
+        texture_file:
+          type: string
+          description: Optional HDR/EXR environment texture path.
+        intensity:
+          type: number
+          default: 1.0
+          description: Light intensity.
+        exposure:
+          type: number
+          default: 0.0
+          description: Light exposure in stops.
+        color:
+          type: array
+          items:
+            type: number
+          minItems: 3
+          maxItems: 3
+          description: RGB light color as [r, g, b].
+        texture_format:
+          type: string
+          enum: [automatic, latlong, mirroredBall, angular, cubeMapVerticalCross]
+          default: latlong
+          description: Dome environment texture layout.
+    read_only: false
+    destructive: false
+    idempotent: true
+    execution: sync
+    timeout_hint_secs: 30
+    source_file: scripts/create_dome_light.py
+    annotations:
+      read_only_hint: false
+      destructive_hint: false
+      idempotent_hint: true
+    next-tools:
+      on-success:
+        - openusd_light_camera__set_transform
+        - openusd_stage__list_stage
+
   - name: set_transform
     description: Set translate, rotate (XYZ euler), and/or scale on an Xformable prim.
     input_schema:

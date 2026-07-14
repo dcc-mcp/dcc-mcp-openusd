@@ -58,6 +58,7 @@ class TestLightCameraPxrAvailable:
         from dcc_mcp_openusd.runtime import (
             create_camera,
             create_distant_light,
+            create_dome_light,
             create_sphere_light,
             create_stage,
             set_transform,
@@ -72,6 +73,27 @@ class TestLightCameraPxrAvailable:
 
         sl = create_sphere_light(stage_file, "/World/RimLight", color=[0.8, 0.9, 1])
         assert sl["runtime"] == "pxr"
+
+        hdr = tmp_path / "studio.exr"
+        hdr.touch()
+        dome = create_dome_light(
+            stage_file,
+            "/World/Environment",
+            texture_file=str(hdr),
+            intensity=1.5,
+            exposure=2.0,
+            texture_format="latlong",
+        )
+        assert dome["texture_file"].endswith("studio.exr")
+
+        from pxr import Usd, UsdLux
+
+        stage = Usd.Stage.Open(stage_file)
+        dome_light = UsdLux.DomeLight.Get(stage, "/World/Environment")
+        assert dome_light.GetIntensityAttr().Get() == pytest.approx(1.5)
+        assert dome_light.GetExposureAttr().Get() == pytest.approx(2.0)
+        assert dome_light.GetTextureFileAttr().Get().path.endswith("studio.exr")
+        assert dome_light.GetTextureFormatAttr().Get() == "latlong"
 
         xf = set_transform(stage_file, "/World/Camera", translate=[0, 2, 10], rotate=[-10, 0, 0])
         assert xf["runtime"] == "pxr"
