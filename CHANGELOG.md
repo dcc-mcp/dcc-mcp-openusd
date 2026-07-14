@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.8.0](https://github.com/dcc-mcp/dcc-mcp-openusd/compare/v0.7.0...v0.8.0) (2026-07-14)
+
+
+### Features
+
+* add portable USD mesh authoring ([#44](https://github.com/dcc-mcp/dcc-mcp-openusd/issues/44)) ([029cbd5](https://github.com/dcc-mcp/dcc-mcp-openusd/commit/029cbd56dc4595f7f50cdb70408b3ce99ec54349))
+* add USD visibility control ([#42](https://github.com/dcc-mcp/dcc-mcp-openusd/issues/42)) ([b03cc2a](https://github.com/dcc-mcp/dcc-mcp-openusd/commit/b03cc2a41a2e970152372b2bcd15554e0174bd8a))
+
 ## [0.7.0](https://github.com/dcc-mcp/dcc-mcp-openusd/compare/v0.6.0...v0.7.0) (2026-07-14)
 
 
