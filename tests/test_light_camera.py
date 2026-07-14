@@ -40,6 +40,12 @@ class TestLightCameraPxrMissing:
         with pytest.raises(OpenUsdError, match="pxr runtime"):
             set_transform(self._make_stage(tmp_path), "/World/X", translate=[1, 0, 0])
 
+    def test_set_visibility_fails_without_pxr(self, tmp_path):
+        from dcc_mcp_openusd.runtime import OpenUsdError, set_visibility
+
+        with pytest.raises(OpenUsdError, match="pxr runtime"):
+            set_visibility(self._make_stage(tmp_path), "/World/X", visible=False)
+
 
 @pytest.mark.skipif(not _HAS_PXR, reason="pxr not available")
 class TestLightCameraPxrAvailable:
@@ -97,3 +103,22 @@ class TestLightCameraPxrAvailable:
 
         xf = set_transform(stage_file, "/World/Camera", translate=[0, 2, 10], rotate=[-10, 0, 0])
         assert xf["runtime"] == "pxr"
+
+    def test_set_visibility(self, tmp_path):
+        from dcc_mcp_openusd.runtime import create_stage, define_xform, set_visibility
+
+        stage_file = str(tmp_path / "scene.usda")
+        create_stage(stage_file)
+        define_xform(stage_file, "/World/Atmosphere")
+
+        hidden = set_visibility(stage_file, "/World/Atmosphere", visible=False)
+        assert hidden["visibility"] == "invisible"
+
+        from pxr import Usd, UsdGeom
+
+        stage = Usd.Stage.Open(stage_file)
+        prim = stage.GetPrimAtPath("/World/Atmosphere")
+        assert UsdGeom.Imageable(prim).ComputeVisibility() == UsdGeom.Tokens.invisible
+
+        shown = set_visibility(stage_file, "/World/Atmosphere", visible=True)
+        assert shown["visibility"] == "inherited"
