@@ -1,30 +1,16 @@
-"""Set the active variant selection in a variant set (pxr-required)."""
+"""Select a variant on a prim (pxr-required)."""
 
 from __future__ import annotations
 
-import argparse
-import json
-import sys
+from dcc_mcp_core.skill import run_main, skill_entry, skill_success
 
-from dcc_mcp_openusd.runtime import OpenUsdError, set_variant_selection
+from dcc_mcp_openusd.runtime import set_variant_selection
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description="Set variant selection on a prim.")
-    parser.add_argument("--stage-file", required=True)
-    parser.add_argument("--prim-path", required=True)
-    parser.add_argument("--variant-set-name", required=True)
-    parser.add_argument("--variant-name", required=True)
-    args = parser.parse_args()
-
-    try:
-        result = set_variant_selection(args.stage_file, args.prim_path, args.variant_set_name, args.variant_name)
-        print(json.dumps({"success": True, "message": "Variant selection set", **result}))
-        return 0
-    except OpenUsdError as exc:
-        print(json.dumps({"success": False, "message": str(exc), "runtime": "none"}))
-        return 1
+@skill_entry
+def main(**kwargs) -> dict:
+    return skill_success("Variant selection set", **set_variant_selection(**kwargs))
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    run_main(main)

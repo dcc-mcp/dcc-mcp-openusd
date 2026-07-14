@@ -1,30 +1,16 @@
-"""Create a minimal OpenUSD stage."""
+"""Create an OpenUSD stage."""
 
 from __future__ import annotations
 
-import argparse
-import json
-import sys
+from dcc_mcp_core.skill import run_main, skill_entry, skill_success
 
-from dcc_mcp_openusd.runtime import OpenUsdError, create_stage
+from dcc_mcp_openusd.runtime import create_stage
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description="Create an OpenUSD stage.")
-    parser.add_argument("--stage-file", required=True)
-    parser.add_argument("--name", default="scene")
-    parser.add_argument("--up-axis", default="Y")
-    parser.add_argument("--meters-per-unit", type=float, default=1.0)
-    args = parser.parse_args()
-
-    try:
-        context = create_stage(args.stage_file, args.name, args.up_axis, args.meters_per_unit)
-        print(json.dumps({"success": True, "message": "OpenUSD stage created", "context": context}))
-        return 0
-    except OpenUsdError as exc:
-        print(json.dumps({"success": False, "message": str(exc)}))
-        return 1
+@skill_entry
+def main(**kwargs) -> dict:
+    return skill_success("OpenUSD stage created", **create_stage(**kwargs))
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    run_main(main)
