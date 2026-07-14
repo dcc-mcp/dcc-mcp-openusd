@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.7.0](https://github.com/dcc-mcp/dcc-mcp-openusd/compare/v0.6.0...v0.7.0) (2026-07-14)
+
+
+### Features
+
+* add portable PBR lighting and point FX ([#41](https://github.com/dcc-mcp/dcc-mcp-openusd/issues/41)) ([3f68077](https://github.com/dcc-mcp/dcc-mcp-openusd/commit/3f68077f4233007f7e8d6613393fb401f9f25dc9))
+
+
+### Bug Fixes
+
+* support keyword tool entrypoints ([#39](https://github.com/dcc-mcp/dcc-mcp-openusd/issues/39)) ([7edf2a7](https://github.com/dcc-mcp/dcc-mcp-openusd/commit/7edf2a73a4c6969fdc5444478524c12a2a076020))
+
 ## [0.6.0](https://github.com/dcc-mcp/dcc-mcp-openusd/compare/v0.5.0...v0.6.0) (2026-06-28)
 
 
