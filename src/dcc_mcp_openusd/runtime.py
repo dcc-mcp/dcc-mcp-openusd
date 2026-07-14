@@ -973,6 +973,32 @@ def set_transform(
     }
 
 
+def set_visibility(stage_file: str, prim_path: str, visible: bool = True) -> Dict[str, Any]:
+    """Set authored visibility on an Imageable prim."""
+    path = _existing_file(stage_file)
+    prim_path = _normalize_prim_path(prim_path)
+
+    stage = _open_stage(path)
+    from pxr import UsdGeom  # type: ignore
+
+    prim = stage.GetPrimAtPath(prim_path)
+    if not prim or not prim.IsValid():
+        raise OpenUsdError(f"Prim not found: {prim_path}")
+
+    imageable = UsdGeom.Imageable(prim)
+    if not imageable:
+        raise OpenUsdError(f"Prim is not Imageable: {prim_path}")
+    visibility = UsdGeom.Tokens.inherited if visible else UsdGeom.Tokens.invisible
+    imageable.CreateVisibilityAttr().Set(visibility)
+    stage.GetRootLayer().Save()
+    return {
+        "stage_file": str(path),
+        "prim_path": prim_path,
+        "visibility": visibility,
+        "runtime": "pxr",
+    }
+
+
 # --- openusd-animation ------------------------------------------------------
 
 

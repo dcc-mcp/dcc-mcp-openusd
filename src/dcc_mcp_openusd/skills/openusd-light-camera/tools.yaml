@@ -208,3 +208,33 @@ tools:
     next-tools:
       on-success:
         - openusd_stage__list_stage
+
+  - name: set_visibility
+    description: Set authored visibility on a UsdGeomImageable prim.
+    input_schema:
+      type: object
+      required: [stage_file, prim_path]
+      properties:
+        stage_file:
+          type: string
+          description: Stage file to mutate.
+        prim_path:
+          type: string
+          description: Imageable prim whose visibility should be authored.
+        visible:
+          type: boolean
+          default: true
+          description: True authors inherited visibility; false authors invisible.
+    read_only: false
+    destructive: false
+    idempotent: true
+    execution: sync
+    timeout_hint_secs: 30
+    source_file: scripts/set_visibility.py
+    annotations:
+      read_only_hint: false
+      destructive_hint: false
+      idempotent_hint: true
+    next-tools:
+      on-success:
+        - openusd_stage__list_stage
