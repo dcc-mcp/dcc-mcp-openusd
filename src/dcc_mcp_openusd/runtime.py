@@ -709,6 +709,60 @@ def create_points(
     }
 
 
+def create_mesh(
+    stage_file: str,
+    prim_path: str,
+    points: List[List[float]],
+    face_vertex_counts: List[int],
+    face_vertex_indices: List[int],
+    subdivision_scheme: str = "none",
+    double_sided: bool = False,
+) -> Dict[str, Any]:
+    """Create renderer-neutral ``UsdGeom.Mesh`` polygon topology."""
+    path = _existing_file(stage_file)
+    prim_path = _normalize_prim_path(prim_path)
+    if len(points) < 3:
+        raise OpenUsdError("points must contain at least three positions")
+    if not face_vertex_counts:
+        raise OpenUsdError("face_vertex_counts must contain at least one face")
+
+    counts = [int(value) for value in face_vertex_counts]
+    if any(value < 3 for value in counts):
+        raise OpenUsdError("every face_vertex_counts value must be at least 3")
+    indices = [int(value) for value in face_vertex_indices]
+    if sum(counts) != len(indices):
+        raise OpenUsdError("sum of face_vertex_counts must equal the number of face_vertex_indices")
+    if any(value < 0 or value >= len(points) for value in indices):
+        raise OpenUsdError("face_vertex_indices contains an out-of-range point index")
+
+    schemes = {"none": "none", "catmullClark": "catmullClark", "bilinear": "bilinear"}
+    if subdivision_scheme not in schemes:
+        raise OpenUsdError("subdivision_scheme must be one of: none, catmullClark, bilinear")
+
+    stage = _open_stage(path)
+    from pxr import Gf, UsdGeom, Vt  # type: ignore
+
+    mesh = UsdGeom.Mesh.Define(stage, prim_path)
+    point_values = Vt.Vec3fArray([Gf.Vec3f(*_float3(value, "point")) for value in points])
+    mesh.CreatePointsAttr().Set(point_values)
+    mesh.CreateFaceVertexCountsAttr().Set(Vt.IntArray(counts))
+    mesh.CreateFaceVertexIndicesAttr().Set(Vt.IntArray(indices))
+    mesh.CreateSubdivisionSchemeAttr().Set(getattr(UsdGeom.Tokens, schemes[subdivision_scheme]))
+    mesh.CreateDoubleSidedAttr().Set(bool(double_sided))
+    mesh.CreateExtentAttr().Set(UsdGeom.PointBased.ComputeExtent(point_values))
+
+    stage.GetRootLayer().Save()
+    return {
+        "stage_file": str(path),
+        "prim_path": prim_path,
+        "point_count": len(points),
+        "face_count": len(counts),
+        "face_vertex_count": len(indices),
+        "subdivision_scheme": subdivision_scheme,
+        "runtime": "pxr",
+    }
+
+
 # --- openusd-material -------------------------------------------------------
 
 
