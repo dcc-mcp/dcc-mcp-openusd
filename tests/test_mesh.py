@@ -49,4 +49,3 @@ def test_create_mesh_rejects_invalid_topology(tmp_path):
             face_vertex_counts=[3],
             face_vertex_indices=[0, 1],
         )
-
