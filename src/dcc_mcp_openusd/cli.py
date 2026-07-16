@@ -14,7 +14,7 @@ import time
 from typing import Optional
 
 from dcc_mcp_openusd.__version__ import __version__
-from dcc_mcp_openusd.server import DEFAULT_PORT, OpenUsdMcpServer, start_server, stop_server
+from dcc_mcp_openusd.server import OpenUsdMcpServer, start_server, stop_server
 
 logger = logging.getLogger(__name__)
 
@@ -67,7 +67,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     # Server networking
     net = parser.add_argument_group("networking")
-    net.add_argument("--port", type=int, default=None, help=f"Port to listen on (default: {DEFAULT_PORT})")
+    net.add_argument("--port", type=int, default=None, help="Instance port (default: OS-assigned)")
     net.add_argument("--gateway-port", type=int, default=None, help="Gateway port for multi-instance failover")
     net.add_argument("--registry-dir", default=None, help="Optional gateway registry directory")
 
@@ -128,11 +128,6 @@ def _build_server(args: argparse.Namespace) -> OpenUsdMcpServer:
 
     ``--port 0`` is preserved so core can let the OS assign a free port.
     """
-    port = args.port
-    if port is None:
-        env_port = os.environ.get("DCC_MCP_OPENUSD_PORT")
-        port = int(env_port) if env_port else DEFAULT_PORT
-
     # Gateway failover: CLI flag wins, then env var, then server default
     enable_gateway_failover = args.enable_gateway_failover
     if enable_gateway_failover is None:
@@ -151,7 +146,7 @@ def _build_server(args: argparse.Namespace) -> OpenUsdMcpServer:
     registry_dir = args.registry_dir or os.environ.get("DCC_MCP_REGISTRY_DIR")
 
     return start_server(
-        port=port,
+        port=args.port,
         extra_skill_paths=args.extra_skill_paths,
         gateway_port=gateway_port,
         registry_dir=registry_dir,
