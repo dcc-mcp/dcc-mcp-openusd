@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.1](https://github.com/dcc-mcp/dcc-mcp-openusd/compare/v0.8.0...v0.8.1) (2026-07-16)
+
+
+### Bug Fixes
+
+* use OS-assigned MCP instance ports ([#45](https://github.com/dcc-mcp/dcc-mcp-openusd/issues/45)) ([e286891](https://github.com/dcc-mcp/dcc-mcp-openusd/commit/e28689164bf24cbdb9ddc7427d006b900d6f4509))
+
 ## [0.8.0](https://github.com/dcc-mcp/dcc-mcp-openusd/compare/v0.7.0...v0.8.0) (2026-07-14)
 
 
