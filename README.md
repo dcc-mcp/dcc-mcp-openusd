@@ -13,7 +13,7 @@ stages, and package USDZ-like archives. It is designed to plug into the
 pip install dcc-mcp-openusd
 ```
 
-This release train requires `dcc-mcp-core>=0.19.9`.
+This release train requires `dcc-mcp-core>=0.19.45`.
 
 The base install operates in **text-fallback mode**: it reads and writes USDA
 text without requiring the Pixar USD runtime. This mode is suitable for
@@ -69,13 +69,14 @@ when pxr is absent.
 ## Run
 
 ```bash
-dcc-mcp-openusd --port 8765
+dcc-mcp-openusd
 ```
 
-Then connect an MCP client to:
+The instance uses an OS-assigned direct port. Connect through the stable local
+gateway, or discover the exact direct URL with `dcc-mcp-cli list`:
 
 ```text
-http://127.0.0.1:8765/mcp
+http://127.0.0.1:9765/mcp
 ```
 
 ## Bundled Skills

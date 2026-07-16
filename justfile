@@ -12,7 +12,7 @@ dev:
     {{python}} -m pip install -e ".[dev]"
 
 serve:
-    {{python}} -m dcc_mcp_openusd --port 8765
+    {{python}} -m dcc_mcp_openusd
 
 test:
     {{python}} -m pytest

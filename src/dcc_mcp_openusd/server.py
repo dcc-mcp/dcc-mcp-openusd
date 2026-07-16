@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 SERVER_NAME = "dcc-mcp-openusd"
 SERVER_VERSION = __version__
-DEFAULT_PORT = 8765
+DEFAULT_PORT = 0
 
 _BUILTIN_SKILLS_DIR = Path(__file__).resolve().parent / "skills"
 _DCC_NAME = "openusd"
@@ -26,7 +26,7 @@ _DCC_NAME = "openusd"
 class OpenUsdServerOptions:
     """Adapter-local options collapsed into the dcc-mcp-core server contract."""
 
-    port: int = DEFAULT_PORT
+    port: Optional[int] = None
     extra_skill_paths: Optional[List[str]] = None
     server_name: str = SERVER_NAME
     server_version: str = SERVER_VERSION
@@ -71,7 +71,7 @@ class OpenUsdMcpServer(DccServerBase):
 
     def __init__(
         self,
-        port: int = DEFAULT_PORT,
+        port: Optional[int] = None,
         extra_skill_paths: Optional[List[str]] = None,
         server_name: str = SERVER_NAME,
         server_version: str = SERVER_VERSION,
@@ -185,7 +185,7 @@ _server_instance: Optional[OpenUsdMcpServer] = None
 
 
 def start_server(
-    port: int = DEFAULT_PORT,
+    port: Optional[int] = None,
     extra_skill_paths: Optional[List[str]] = None,
     register_builtins: bool = True,
     include_bundled: bool = True,

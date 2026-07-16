@@ -67,7 +67,7 @@ def test_uvx_discoverable():
 
 def test_default_port_is_known():
     """The default port must match the server module constant."""
-    assert DEFAULT_PORT == 8765
+    assert DEFAULT_PORT == 0
 
 
 def test_package_imports_without_pxr():
@@ -188,8 +188,8 @@ def test_port_zero_preserved(monkeypatch: pytest.MonkeyPatch):
     assert captured["port"] == 0, f"expected port=0, got {captured['port']}"
 
 
-def test_port_absent_uses_default(monkeypatch: pytest.MonkeyPatch):
-    """When --port is not given, DEFAULT_PORT is used."""
+def test_port_absent_delegates_resolution_to_core(monkeypatch: pytest.MonkeyPatch):
+    """When --port is absent, core owns env/default resolution."""
     captured: dict[str, object] = {}
 
     def fake_start_server(**kwargs: object) -> object:
@@ -201,7 +201,7 @@ def test_port_absent_uses_default(monkeypatch: pytest.MonkeyPatch):
     args = _build_parser().parse_args([])
     _build_server(args)
 
-    assert captured["port"] == DEFAULT_PORT
+    assert captured["port"] is None
 
 
 def test_cli_port_beats_env(monkeypatch: pytest.MonkeyPatch):
@@ -222,8 +222,8 @@ def test_cli_port_beats_env(monkeypatch: pytest.MonkeyPatch):
     assert captured["port"] == 5000, "CLI --port should override env"
 
 
-def test_env_port_fallback(monkeypatch: pytest.MonkeyPatch):
-    """When --port is absent, DCC_MCP_OPENUSD_PORT env var is used."""
+def test_env_port_resolution_is_delegated_to_core(monkeypatch: pytest.MonkeyPatch):
+    """The adapter CLI must not duplicate core's environment precedence."""
     monkeypatch.setenv("DCC_MCP_OPENUSD_PORT", "9999")
 
     captured: dict[str, object] = {}
@@ -237,7 +237,7 @@ def test_env_port_fallback(monkeypatch: pytest.MonkeyPatch):
     args = _build_parser().parse_args([])
     _build_server(args)
 
-    assert captured["port"] == 9999, "env DCC_MCP_OPENUSD_PORT should be used"
+    assert captured["port"] is None
 
 
 # ── signal handler behavior ───────────────────────────────────────────────

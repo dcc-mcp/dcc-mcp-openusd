@@ -29,5 +29,5 @@ def test_bundled_skill_files_exist():
 
 def test_public_api_exports_server():
     assert dcc_mcp_openusd.SERVER_NAME == "dcc-mcp-openusd"
-    assert dcc_mcp_openusd.DEFAULT_PORT == 8765
+    assert dcc_mcp_openusd.DEFAULT_PORT == 0
     assert callable(dcc_mcp_openusd.start_server)
