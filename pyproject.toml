@@ -45,10 +45,10 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/loonghao/dcc-mcp-openusd"
-Repository = "https://github.com/loonghao/dcc-mcp-openusd"
-Issues = "https://github.com/loonghao/dcc-mcp-openusd/issues"
-Changelog = "https://github.com/loonghao/dcc-mcp-openusd/releases"
+Homepage = "https://github.com/dcc-mcp/dcc-mcp-openusd"
+Repository = "https://github.com/dcc-mcp/dcc-mcp-openusd"
+Issues = "https://github.com/dcc-mcp/dcc-mcp-openusd/issues"
+Changelog = "https://github.com/dcc-mcp/dcc-mcp-openusd/releases"
 
 [project.scripts]
 dcc-mcp-openusd = "dcc_mcp_openusd.cli:main"
