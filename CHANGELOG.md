@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.8.2](https://github.com/dcc-mcp/dcc-mcp-openusd/compare/v0.8.1...v0.8.2) (2026-07-19)
+
+
+### Documentation
+
+* align agent workflow and branding ([82325c1](https://github.com/dcc-mcp/dcc-mcp-openusd/commit/82325c10c4b378416579458776c2d28b866f161f))
+* document CLI install and updates ([f3f61d9](https://github.com/dcc-mcp/dcc-mcp-openusd/commit/f3f61d92531c69925bc74d47a74682be0b241799))
+
 ## [0.8.1](https://github.com/dcc-mcp/dcc-mcp-openusd/compare/v0.8.0...v0.8.1) (2026-07-16)
 
 
