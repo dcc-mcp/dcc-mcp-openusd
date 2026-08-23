@@ -6,6 +6,7 @@ Supports foreground, daemon, and ``uvx dcc-mcp-openusd`` one-shot launch.
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import os
 import signal
@@ -14,13 +15,14 @@ import time
 from typing import Optional
 
 from dcc_mcp_openusd.__version__ import __version__
+from dcc_mcp_openusd.doctor import evaluate
 from dcc_mcp_openusd.server import OpenUsdMcpServer, start_server, stop_server
 
 logger = logging.getLogger(__name__)
 
 
 def main(argv: Optional[list[str]] = None) -> int:
-    """Run the OpenUSD MCP server (foreground or daemon)."""
+    """Run the OpenUSD MCP server or its read-only verification surface."""
     parser = _build_parser()
     args = parser.parse_args(argv)
 
@@ -29,6 +31,25 @@ def main(argv: Optional[list[str]] = None) -> int:
     if args.version:
         print(f"dcc-mcp-openusd {__version__}")
         return 0
+
+    if args.command in {"doctor", "verify"}:
+        report = evaluate(
+            args.command,
+            {
+                "project_dir": args.project_dir,
+                "port": args.port,
+                "gateway_port": args.gateway_port,
+                "registry_dir": args.registry_dir,
+                "daemon_requested": args.daemon,
+                "pidfile": args.pidfile,
+                "metrics_enabled": args.metrics,
+                "file_logging_enabled": not args.no_file_logging,
+                "gateway_failover_enabled": args.enable_gateway_failover,
+                "extra_skill_paths": list(args.extra_skill_paths or []),
+            },
+        )
+        print(json.dumps(report, ensure_ascii=False, indent=2))
+        return int(report["exit_code"])
 
     # ── daemon mode ────────────────────────────────────────────────────
     if args.daemon:
@@ -62,7 +83,15 @@ def _build_parser() -> argparse.ArgumentParser:
         prog="dcc-mcp-openusd",
         description="OpenUSD MCP Server — headless daemon for Pixar USD scene authoring over MCP",
     )
+    parser.add_argument(
+        "command",
+        nargs="?",
+        choices=("serve", "doctor", "verify"),
+        default="serve",
+        help="Run the server (default) or inspect runtime readiness",
+    )
     parser.add_argument("--version", action="store_true", help="Print version and exit")
+    parser.add_argument("--json", action="store_true", help="Emit the stable doctor/verify JSON contract")
     parser.add_argument("--debug", action="store_true", help="Enable debug logging")
 
     # Server networking
