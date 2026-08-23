@@ -80,6 +80,17 @@ jobs:
         shell: bash
         run: |
           python -c "from dcc_mcp_openusd.runtime import detect_runtime; rt=detect_runtime(); assert not rt.has_pxr, 'pxr should be absent in minimal job'; print('pxr absent — OK')"
+      - name: Doctor JSON text-fallback and preflight exit smoke
+        shell: bash
+        run: |
+          dcc-mcp-openusd verify --json > doctor-minimal.json
+          python -c 'import json; report=json.load(open("doctor-minimal.json", encoding="utf-8")); assert report["exit_code"] == 0; assert report["runtime"]["mode"] == "text-fallback"; assert report["runtime"]["full_capabilities"] is False; assert report["capabilities"]["native_pxr"] is False'
+          set +e
+          dcc-mcp-openusd doctor --json --port -1 > doctor-preflight.json
+          exit_code=$?
+          set -e
+          test "$exit_code" -eq 10
+          python -c 'import json; report=json.load(open("doctor-preflight.json", encoding="utf-8")); assert report["failure"] == {"stage": "configuration_preflight", "reason": "invalid_port"}'
       - name: Run unit tests + contract test
         run: python -m pytest tests/ --ignore=tests/e2e
 
@@ -100,6 +111,11 @@ jobs:
         shell: bash
         run: |
           python -c "from dcc_mcp_openusd.runtime import detect_runtime; rt=detect_runtime(); assert rt.has_pxr, 'pxr must be present in openusd job'; print(f'pxr present — {rt.version}')"
+      - name: Doctor JSON pxr verification smoke
+        shell: bash
+        run: |
+          dcc-mcp-openusd verify --json > doctor-pxr.json
+          python -c 'import json; report=json.load(open("doctor-pxr.json", encoding="utf-8")); assert report["exit_code"] == 0; assert report["runtime"]["mode"] == "pxr"; assert report["runtime"]["full_capabilities"] is True; assert report["runtime"]["verification"]["result"] == "ready"'
       - name: Run e2e golden path tests
         run: python -m pytest tests/e2e/ -v
 

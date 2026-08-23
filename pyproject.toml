@@ -68,6 +68,7 @@ include = [
     "tests",
     "tools",
     "README.md",
+    "install.md",
     "CHANGELOG.md",
     "LICENSE",
     "justfile",

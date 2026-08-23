@@ -56,16 +56,13 @@ stages, and package USDZ-like archives. It is designed to plug into the
 
 ## Install
 
+Follow the [wheel-first installation and lifecycle guide](install.md). The
+adapter requires `dcc-mcp-core>=0.19.45`. After installing a trusted wheel, run:
+
 ```bash
-pip install dcc-mcp-openusd
+dcc-mcp-openusd doctor --json
+dcc-mcp-openusd verify --json
 ```
-
-This release train requires `dcc-mcp-core>=0.19.45`.
-
-The base install operates in **text-fallback mode**: it reads and writes USDA
-text without requiring the Pixar USD runtime. This mode is suitable for
-lightweight agents, CI gates, and environments where native USD libraries
-are unavailable.
 
 The base install operates in **text-fallback mode**: it reads and writes USDA
 text without requiring the Pixar USD runtime. This mode is suitable for
@@ -75,7 +72,7 @@ are unavailable.
 For full OpenUSD runtime behavior, install the optional Pixar USD bindings:
 
 ```bash
-pip install "dcc-mcp-openusd[openusd]"
+python -m pip install --only-binary=:all: "dcc-mcp-openusd[openusd]"
 ```
 
 The `[openusd]` extra pulls in `usd-core>=24.11` (the Pixar open-source USD
@@ -89,8 +86,8 @@ and composition-arc operations go through the native USD runtime.
 from dcc_mcp_openusd.runtime import detect_runtime
 
 runtime = detect_runtime()
-print(runtime.has_pxr)   # True when pxr is installed
-print(runtime.version)   # e.g. "24.11"
+print(runtime.has_pxr)  # True when pxr is installed
+print(runtime.version)  # API tuple label, for example "0.26.5"
 ```
 
 Every public function returns a `"runtime"` field in its result dict —
@@ -120,11 +117,11 @@ dcc-mcp-openusd
 ```
 
 The instance uses an OS-assigned direct port. Connect through the stable local
-gateway, or discover the exact direct URL with `dcc-mcp-cli list`:
+gateway, or discover the exact direct URL with `dcc-mcp-cli list`.
 
-```text
-http://127.0.0.1:9765/mcp
-```
+Daemon startup, explicit pidfiles, identity-verified platform-specific stop,
+upgrade, and uninstall are documented in [install.md](install.md). Doctor and
+verify never start the service or daemon.
 
 ## Bundled Skills
 
@@ -175,6 +172,5 @@ The CI matrix enforces both modes:
 
 ## Release
 
-The repository uses `release-please`. The baseline version is `0.0.0` so the
-first release PR will cut `v0.1.0`. PyPI publishing is wired through the
+The repository uses `release-please`; PyPI publishing is wired through the
 `pypi` GitHub environment.
