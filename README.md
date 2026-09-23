@@ -100,7 +100,7 @@ Every public function returns a `"runtime"` field in its result dict —
 | `create_stage`, `create_project` | USDA text | Native `Usd.Stage` |
 | `list_stage`, `define_xform`, `define_prim` | USDA parse + insert | Native API |
 | `add_reference`, `set_xform_ops` | USDA text | Native API |
-| `validate_stage`, `snapshot_stage`, `package_usdz` | USDA checks | Native validation |
+| `validate_stage`, `snapshot_stage`, `package_usdz` | Shared rule set (USDA parse) | Shared rule set (native facts) |
 | Material binding (`UsdShade`) | — | Requires pxr |
 | Camera / Light (`UsdGeomCamera`, `UsdLux`) | — | Requires pxr |
 | Time-sampled animation | — | Requires pxr |
@@ -109,6 +109,11 @@ Every public function returns a `"runtime"` field in its result dict —
 Advanced features that cannot be expressed through text-fallback raise
 `OpenUsdError("... requires the Pixar USD (pxr) package. Install it with: pip install usd-core")`
 when pxr is absent.
+
+`validate_stage` is the exception: it runs the **same rule set** on both runtimes
+and only uses `pxr` to read composition facts (prim tree, references, material
+bindings). Each issue is `{code, severity, message, location}`; the registry is
+`dcc_mcp_openusd.runtime.VALIDATION_RULES`.
 
 ## Run
 

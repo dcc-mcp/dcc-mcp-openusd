@@ -8,13 +8,14 @@ CI environments.
 from __future__ import annotations
 
 import json
+import math
 import re
 import shutil
 import time
 import zipfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set, Tuple
 
 if TYPE_CHECKING:
     from dcc_mcp_core.asset_import import AssetDescriptor, ImportToSceneRequest, ImportToSceneResult
@@ -362,45 +363,367 @@ def set_stage_metadata(
     return {"stage_file": str(path), "runtime": runtime}
 
 
-def validate_stage(stage_file: str, strict: bool = False) -> Dict[str, Any]:
-    """Validate a stage using pxr when available plus adapter-level invariants."""
-    path = _existing_file(stage_file)
-    issues: List[Dict[str, str]] = []
-    runtime = "text-fallback"
+# ---------------------------------------------------------------------------
+# Stage validation
+# ---------------------------------------------------------------------------
 
+#: Stable validation rule codes. ``PIP-788`` owns the final ``ValidationIssue``
+#: schema; this map is the code registry that schema will consume. The same rule
+#: set is applied by both the pxr and the text-fallback runtime.
+VALIDATION_RULES: Dict[str, str] = {
+    "INVALID_STAGE_HEADER": "Text USD layer must start with a #usda header",
+    "BINARY_LAYER_REQUIRES_PXR": "Binary USD layer can only be validated with the pxr package",
+    "STAGE_OPEN_FAILED": "Stage could not be opened",
+    "MISSING_DEFAULT_PRIM": "Stage does not declare defaultPrim",
+    "INVALID_DEFAULT_PRIM": "defaultPrim does not resolve to an existing prim",
+    "MISSING_UP_AXIS": "Stage does not declare upAxis",
+    "INVALID_UP_AXIS": "upAxis must be one of X, Y, Z",
+    "UP_AXIS_MISMATCH": "Sublayer declares a different upAxis than the root layer",
+    "MISSING_METERS_PER_UNIT": "Stage does not declare metersPerUnit",
+    "INVALID_METERS_PER_UNIT": "metersPerUnit must be a positive number",
+    "METERS_PER_UNIT_MISMATCH": "Sublayer declares a different metersPerUnit than the root layer",
+    "UNRESOLVED_REFERENCE": "Reference asset path cannot be resolved on disk",
+    "REFERENCE_CYCLE": "Reference chain loops back to an already visited layer",
+    "INCOMPLETE_MATERIAL": "Material has no surface output or shader",
+    "DANGLING_MATERIAL_BINDING": "material:binding targets a missing or non-Material prim",
+    "UNBOUND_MATERIAL": "Material is defined but never bound to any prim",
+    "NO_TRAVERSABLE_PRIMS": "Stage has no traversable prims",
+    "UNDEFINED_PRIM_TYPE": "Nested prim is defined without a type name",
+}
+
+_RULE_SEVERITY: Dict[str, str] = {
+    "INVALID_STAGE_HEADER": "error",
+    "BINARY_LAYER_REQUIRES_PXR": "error",
+    "STAGE_OPEN_FAILED": "error",
+    "MISSING_DEFAULT_PRIM": "error",
+    "INVALID_DEFAULT_PRIM": "error",
+    "MISSING_UP_AXIS": "warning",
+    "INVALID_UP_AXIS": "error",
+    "UP_AXIS_MISMATCH": "error",
+    "MISSING_METERS_PER_UNIT": "warning",
+    "INVALID_METERS_PER_UNIT": "error",
+    "METERS_PER_UNIT_MISMATCH": "error",
+    "UNRESOLVED_REFERENCE": "error",
+    "REFERENCE_CYCLE": "error",
+    "INCOMPLETE_MATERIAL": "warning",
+    "DANGLING_MATERIAL_BINDING": "error",
+    "UNBOUND_MATERIAL": "warning",
+    "NO_TRAVERSABLE_PRIMS": "warning",
+    "UNDEFINED_PRIM_TYPE": "warning",
+}
+
+#: Rules that a strict run promotes from warning to error.
+_STRICT_ERROR_RULES = frozenset({"MISSING_UP_AXIS", "MISSING_METERS_PER_UNIT"})
+
+_VALID_AXES = ("X", "Y", "Z")
+_MAX_LAYER_WALK = 16
+
+
+@dataclass
+class _StageFacts:
+    """Runtime-independent facts collected from a stage before validation.
+
+    Both the pxr and the text-fallback collector fill the same fields so that a
+    single rule set can judge either runtime.
+    """
+
+    stage_path: Optional[Path] = None
+    layer_chain: List[Dict[str, Any]] = field(default_factory=list)
+    header_ok: bool = False
+    binary_layer: bool = False
+    open_error: Optional[str] = None
+    prim_types: Dict[str, str] = field(default_factory=dict)
+    untyped_prims: Set[str] = field(default_factory=set)
+    materials: Dict[str, bool] = field(default_factory=dict)
+    bindings: List[Tuple[str, str]] = field(default_factory=list)
+    references: List[Tuple[str, str]] = field(default_factory=list)
+
+    @property
+    def stage_dir(self) -> Path:
+        return self.stage_path.parent if self.stage_path else Path(".")
+
+
+def validate_stage(stage_file: str, strict: bool = False) -> Dict[str, Any]:
+    """Validate a stage using pxr when available plus adapter-level invariants.
+
+    The rule set is shared by both runtimes. ``pxr`` is only used to extract
+    composition facts (prim tree, references, material bindings); layer metadata
+    and every rule itself run through the same code, so a stage is judged by the
+    same rules whether or not ``pxr`` is installed.
+
+    Every issue carries ``severity``, ``message``, plus a stable ``code`` from
+    :data:`VALIDATION_RULES` and a ``location`` (prim path or ``[...]`` layer
+    marker).
+    """
+    path = _existing_file(stage_file)
+    chain = _collect_layer_chain(path)
+    root_meta = chain[0] if chain else {}
+
+    facts = _StageFacts(
+        stage_path=path,
+        layer_chain=chain,
+        header_ok=bool(root_meta.get("header_ok")),
+        binary_layer=bool(root_meta.get("binary")),
+    )
+
+    runtime = "text-fallback"
     if detect_runtime().has_pxr:
         try:
-            from pxr import Usd  # type: ignore
-
+            facts = _collect_facts_pxr(path, chain)
             runtime = "pxr"
-            stage = Usd.Stage.Open(str(path))
-            if stage is None:
-                issues.append({"severity": "error", "message": "Usd.Stage.Open returned None"})
-            else:
-                if not stage.GetDefaultPrim():
-                    issues.append({"severity": "error", "message": "Stage has no defaultPrim"})
-                if not any(True for _ in stage.Traverse()):
-                    issues.append({"severity": "warning", "message": "Stage has no traversable prims"})
+        except ImportError:
+            # pxr is reported as available but not importable here; degrade to text.
+            if not facts.binary_layer:
+                facts = _collect_facts_text(path, chain)
         except Exception as exc:
-            issues.append({"severity": "error", "message": f"pxr validation failed: {exc}"})
-    else:
-        text = path.read_text(encoding="utf-8")
-        if not text.lstrip().startswith("#usda"):
-            issues.append({"severity": "error", "message": "Stage does not start with #usda"})
-        if "defaultPrim" not in text:
-            issues.append({"severity": "error", "message": "Stage has no defaultPrim metadata"})
-        if "upAxis" not in text:
-            issues.append({"severity": "warning", "message": "Stage has no upAxis metadata"})
-        if strict and "metersPerUnit" not in text:
-            issues.append({"severity": "error", "message": "Stage has no metersPerUnit metadata"})
+            facts.open_error = str(exc)
+            runtime = "pxr"
+    elif not facts.binary_layer:
+        # A binary layer is unreadable without pxr; BINARY_LAYER_REQUIRES_PXR reports it.
+        facts = _collect_facts_text(path, chain)
 
+    issues = _run_validators(facts, strict)
     return {
         "stage_file": str(path),
         "valid": not any(issue["severity"] == "error" for issue in issues),
         "issue_count": len(issues),
         "issues": issues,
         "runtime": runtime,
+        "rules": sorted(VALIDATION_RULES),
     }
+
+
+def _collect_facts_pxr(path: Path, chain: List[Dict[str, Any]]) -> _StageFacts:
+    """Collect stage facts through the Pixar USD bindings."""
+    from pxr import Usd  # type: ignore
+
+    facts = _StageFacts(stage_path=path, layer_chain=chain)
+    facts.header_ok = bool(chain and chain[0].get("header_ok"))
+    facts.binary_layer = bool(chain and chain[0].get("binary"))
+
+    stage = Usd.Stage.Open(str(path))
+    if stage is None:
+        raise OpenUsdError(f"Could not open stage: {path}")
+
+    for prim in stage.Traverse():
+        prim_path = str(prim.GetPath())
+        prim_type = prim.GetTypeName() or ""
+        facts.prim_types[prim_path] = prim_type
+        if not prim_type:
+            facts.untyped_prims.add(prim_path)
+        if prim_type == "Material":
+            facts.materials[prim_path] = _material_has_surface_pxr(prim)
+        for asset in _pxr_composition_assets(prim):
+            facts.references.append((prim_path, asset))
+        for relationship in prim.GetRelationships():
+            if relationship.GetName() != "material:binding":
+                continue
+            for target in relationship.GetTargets():
+                facts.bindings.append((prim_path, _strip_property_suffix(str(target))))
+
+    return facts
+
+
+def _collect_facts_text(path: Path, chain: List[Dict[str, Any]]) -> _StageFacts:
+    """Collect stage facts by parsing USDA text."""
+    facts = _StageFacts(stage_path=path, layer_chain=chain)
+    facts.header_ok = bool(chain and chain[0].get("header_ok"))
+    facts.binary_layer = bool(chain and chain[0].get("binary"))
+    if facts.binary_layer:
+        return facts
+
+    text = path.read_text(encoding="utf-8", errors="replace")
+    blocks = _parse_usda_blocks(text)
+    for block in blocks:
+        prim_path = block["path"]
+        facts.prim_types[prim_path] = block["type"]
+        if block["specifier"] == "def" and not block["type"]:
+            facts.untyped_prims.add(prim_path)
+        own_text = block["own_text"]
+        if block["type"] == "Material":
+            facts.materials[prim_path] = _material_has_surface_text(prim_path, own_text, blocks)
+        for asset in _find_reference_paths(own_text):
+            facts.references.append((prim_path, asset))
+        for target in _find_binding_targets(own_text):
+            facts.bindings.append((prim_path, _strip_property_suffix(target)))
+    return facts
+
+
+def _pxr_composition_assets(prim: Any) -> List[str]:
+    """Return authored reference/payload asset paths on a pxr prim."""
+    assets: List[str] = []
+    for field_name in ("references", "payload"):
+        try:
+            list_op = prim.GetMetadata(field_name)
+        except Exception:
+            continue
+        if list_op is None:
+            continue
+        try:
+            items = list(list_op.GetAppliedItems())
+        except Exception:
+            items = []
+        for item in items:
+            asset = getattr(item, "assetPath", "") or ""
+            if asset:
+                assets.append(asset)
+    return assets
+
+
+def _material_has_surface_pxr(prim: Any) -> bool:
+    """Return True when a pxr Material prim has a surface output or a shader."""
+    try:
+        from pxr import Usd, UsdShade  # type: ignore
+
+        surface = UsdShade.Material(prim).GetSurfaceOutput()
+        if surface is not None and surface.HasConnectedSource():
+            return True
+        for descendant in Usd.PrimRange(prim):
+            if descendant.GetPath() != prim.GetPath() and descendant.GetTypeName() == "Shader":
+                return True
+    except Exception:
+        return True
+    return False
+
+
+def _material_has_surface_text(material_path: str, own_text: str, blocks: List[Dict[str, Any]]) -> bool:
+    """Return True when a USDA Material prim has a surface output or a shader."""
+    if re.search(r"\boutputs:surface\b", own_text):
+        return True
+    prefix = material_path + "/"
+    return any(block["path"].startswith(prefix) and block["type"] == "Shader" for block in blocks)
+
+
+def _run_validators(facts: _StageFacts, strict: bool) -> List[Dict[str, str]]:
+    """Apply the shared rule set to collected stage facts."""
+    issues: List[Dict[str, str]] = []
+
+    def add(code: str, message: str, location: str = "/") -> None:
+        issues.append(
+            {
+                "code": code,
+                "severity": "error" if strict and code in _STRICT_ERROR_RULES else _RULE_SEVERITY[code],
+                "message": message,
+                "location": location,
+            }
+        )
+
+    chain = facts.layer_chain
+    root_meta = chain[0] if chain else {}
+    stage_name = Path(root_meta.get("file") or "stage").name
+
+    # ── layer integrity ────────────────────────────────────────────────────
+    if facts.open_error:
+        add("STAGE_OPEN_FAILED", f"Stage could not be opened: {facts.open_error}", f"[{stage_name}]")
+    if facts.binary_layer:
+        add(
+            "BINARY_LAYER_REQUIRES_PXR",
+            "Binary USD layer cannot be validated without the pxr package",
+            f"[{stage_name}]",
+        )
+    elif not facts.header_ok:
+        add("INVALID_STAGE_HEADER", "Stage does not start with a #usda header", "[line 1]")
+
+    # ── defaultPrim ────────────────────────────────────────────────────────
+    default_prim = root_meta.get("default_prim")
+    if not default_prim:
+        add("MISSING_DEFAULT_PRIM", "Stage has no defaultPrim metadata", f"[{stage_name}]")
+    else:
+        target = default_prim if str(default_prim).startswith("/") else "/" + str(default_prim)
+        if target not in facts.prim_types:
+            add(
+                "INVALID_DEFAULT_PRIM",
+                f"Stage defaultPrim '{default_prim}' does not resolve to an existing prim",
+                target,
+            )
+
+    # ── units and up axis ──────────────────────────────────────────────────
+    up_axis = root_meta.get("up_axis")
+    if not up_axis:
+        add("MISSING_UP_AXIS", "Stage has no upAxis metadata", f"[{stage_name}]")
+    elif str(up_axis).upper() not in _VALID_AXES:
+        add("INVALID_UP_AXIS", f"Stage upAxis '{up_axis}' is not one of X, Y, Z", f"[{stage_name}]")
+
+    meters_per_unit = root_meta.get("meters_per_unit")
+    if meters_per_unit is None:
+        add("MISSING_METERS_PER_UNIT", "Stage has no metersPerUnit metadata", f"[{stage_name}]")
+    elif not isinstance(meters_per_unit, float) or not meters_per_unit > 0 or not math.isfinite(meters_per_unit):
+        add(
+            "INVALID_METERS_PER_UNIT",
+            f"Stage metersPerUnit must be a positive number, got {meters_per_unit!r}",
+            f"[{stage_name}]",
+        )
+
+    for entry in chain[1:]:
+        if not entry.get("available"):
+            continue
+        layer_name = Path(entry["file"]).name
+        sub_axis = entry.get("up_axis")
+        if sub_axis and up_axis and str(sub_axis).upper() != str(up_axis).upper():
+            add(
+                "UP_AXIS_MISMATCH",
+                f"Sublayer upAxis '{sub_axis}' does not match root layer upAxis '{up_axis}'",
+                f"[{layer_name}]",
+            )
+        sub_meters = entry.get("meters_per_unit")
+        if (
+            isinstance(sub_meters, float)
+            and isinstance(meters_per_unit, float)
+            and not math.isclose(sub_meters, meters_per_unit, rel_tol=1e-6, abs_tol=1e-9)
+        ):
+            add(
+                "METERS_PER_UNIT_MISMATCH",
+                f"Sublayer metersPerUnit {sub_meters:g} does not match root layer metersPerUnit {meters_per_unit:g}",
+                f"[{layer_name}]",
+            )
+
+    # ── composition: references ────────────────────────────────────────────
+    for prim_path, asset in facts.references:
+        if _is_dynamic_asset_path(asset):
+            continue
+        resolved = _resolve_asset_path(facts.stage_dir, asset)
+        if not resolved.exists():
+            add("UNRESOLVED_REFERENCE", f"Reference '{asset}' cannot be resolved on disk", prim_path)
+
+    if facts.stage_path is not None:
+        cycle = _detect_reference_cycle(facts.stage_path)
+        if cycle:
+            add("REFERENCE_CYCLE", f"Reference chain loops back to {cycle}", f"[{cycle}]")
+
+    # ── materials ──────────────────────────────────────────────────────────
+    bound_targets = {target for _, target in facts.bindings}
+    for prim_path, target in facts.bindings:
+        target_type = facts.prim_types.get(target)
+        if target_type is None:
+            add(
+                "DANGLING_MATERIAL_BINDING",
+                f"material:binding targets '{target}' which does not exist",
+                prim_path,
+            )
+        elif target_type != "Material":
+            add(
+                "DANGLING_MATERIAL_BINDING",
+                f"material:binding targets '{target}' which is a '{target_type or 'typeless'}' prim, not a Material",
+                prim_path,
+            )
+
+    for material_path in sorted(facts.materials):
+        if not facts.materials[material_path]:
+            add(
+                "INCOMPLETE_MATERIAL",
+                f"Material '{material_path}' has no connected surface output or shader",
+                material_path,
+            )
+        if material_path not in bound_targets:
+            add("UNBOUND_MATERIAL", f"Material '{material_path}' is not bound to any prim", material_path)
+
+    # ── hierarchy ──────────────────────────────────────────────────────────
+    if not facts.prim_types:
+        add("NO_TRAVERSABLE_PRIMS", "Stage has no traversable prims", "/")
+    for prim_path in sorted(facts.untyped_prims):
+        add("UNDEFINED_PRIM_TYPE", f"Prim '{prim_path}' is defined without a type name", prim_path)
+
+    return issues
 
 
 def snapshot_stage(stage_file: str, output_dir: str, name: Optional[str] = None) -> Dict[str, Any]:
@@ -581,6 +904,353 @@ def _parse_prims_from_usda(text: str) -> List[Dict[str, Any]]:
 def _find_default_prim(text: str) -> Optional[str]:
     match = re.search(r'defaultPrim\s*=\s*"([^"]+)"', text)
     return match.group(1) if match else None
+
+
+# ---------------------------------------------------------------------------
+# USDA text parsing helpers used by stage validation
+# ---------------------------------------------------------------------------
+
+_USDA_HEADER_RE = re.compile(r"^\s*#usda\s", re.MULTILINE)
+_USDA_PRIM_RE = re.compile(r'\b(def|over|class)\s+(?:([A-Za-z_][A-Za-z0-9_:]*)\s+)?"([^"]+)"')
+_ASSET_PATH_RE = re.compile(r"@([^@]*)@")
+_REFERENCE_RE = re.compile(r"\b(?:(?:prepend|append|add)\s+)?(?:references|payload)\s*=")
+_BINDING_RE = re.compile(r"\bmaterial:binding(?::[A-Za-z0-9_:]+)?\s*=\s*([^\n]*)")
+_SUBLAYER_RE = re.compile(r"\bsubLayers\s*=\s*([^\n]*)")
+_BINARY_MAGIC = b"PXR-USDC"
+
+
+def _strip_usda_comments(text: str) -> str:
+    """Remove ``#`` comments from USDA text, preserving line offsets.
+
+    Quoted strings and ``@asset@`` paths are copied verbatim so asset paths
+    containing ``#`` survive parsing.
+    """
+    out: List[str] = []
+    quote: Optional[str] = None
+    index = 0
+    length = len(text)
+    while index < length:
+        char = text[index]
+        if quote:
+            out.append(char)
+            if char == "\\" and index + 1 < length:
+                out.append(text[index + 1])
+                index += 2
+                continue
+            if char == quote:
+                quote = None
+            index += 1
+            continue
+        if char in "\"'":
+            quote = char
+            out.append(char)
+            index += 1
+            continue
+        if char == "@":
+            delimiter = "@@" if text.startswith("@@", index) else "@"
+            end = text.find(delimiter, index + len(delimiter))
+            if end == -1:
+                out.append(text[index:])
+                break
+            out.append(text[index : end + len(delimiter)])
+            index = end + len(delimiter)
+            continue
+        if char == "#" and not (index == 0 and text.startswith("#usda")):
+            newline = text.find("\n", index)
+            if newline == -1:
+                break
+            out.append("\n")
+            index = newline + 1
+            continue
+        out.append(char)
+        index += 1
+    return "".join(out)
+
+
+def _matching_brace(text: str, open_index: int) -> int:
+    """Return the index of the brace closing the one at *open_index*, or -1."""
+    depth = 0
+    for index in range(open_index, len(text)):
+        char = text[index]
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return index
+    return -1
+
+
+def _parse_usda_blocks(text: str) -> List[Dict[str, Any]]:
+    """Parse USDA text into nested prim blocks.
+
+    Each block carries the prim ``path``, ``type``, ``specifier``, ``line`` and
+    ``own_text`` — the text owned by that prim (its metadata block plus its body
+    with nested child blocks removed), so validators never attribute a child's
+    references or bindings to its parent.
+    """
+    stripped = _strip_usda_comments(text)
+    depth_at: List[int] = []
+    depth = 0
+    for char in stripped:
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth = max(0, depth - 1)
+        depth_at.append(depth)
+
+    blocks: List[Dict[str, Any]] = []
+    stack: List[str] = []
+    for match in _USDA_PRIM_RE.finditer(stripped):
+        start = match.start()
+        depth = depth_at[start - 1] if start else 0
+        del stack[depth:]
+        name = match.group(3)
+        path = "/" + "/".join(stack + [name])
+        stack.append(name)
+
+        brace = stripped.find("{", match.end())
+        if brace == -1:
+            continue
+        close = _matching_brace(stripped, brace)
+        if close == -1:
+            close = len(stripped)
+        blocks.append(
+            {
+                "path": path,
+                "parent": path.rsplit("/", 1)[0] or "/",
+                "type": match.group(2) or "",
+                "specifier": match.group(1),
+                "line": stripped.count("\n", 0, start) + 1,
+                "start": start,
+                "brace": brace,
+                "close": close,
+            }
+        )
+
+    children_by_parent: Dict[str, List[Dict[str, Any]]] = {}
+    for block in blocks:
+        children_by_parent.setdefault(block["parent"], []).append(block)
+
+    for block in blocks:
+        segments: List[str] = [stripped[block["start"] : block["brace"] + 1]]
+        cursor = block["brace"] + 1
+        for child in sorted(children_by_parent.get(block["path"], []), key=lambda item: item["start"]):
+            if child["start"] >= cursor:
+                segments.append(stripped[cursor : child["start"]])
+                cursor = max(cursor, child["close"] + 1)
+        segments.append(stripped[cursor : block["close"]])
+        block["own_text"] = "".join(segments)
+
+    return blocks
+
+
+def _parse_usda_metadata(text: str) -> Dict[str, Any]:
+    """Read the layer metadata block of a USDA text layer."""
+    stripped = _strip_usda_comments(text)
+    info: Dict[str, Any] = {
+        "header_ok": False,
+        "default_prim": None,
+        "up_axis": None,
+        "meters_per_unit": None,
+        "sublayers": [],
+    }
+    header = _USDA_HEADER_RE.search(stripped)
+    if not header:
+        return info
+    info["header_ok"] = True
+
+    open_index = stripped.find("(", header.end())
+    if open_index == -1:
+        return info
+
+    end = len(stripped)
+    close_index = stripped.find(")", open_index)
+    if close_index != -1:
+        end = min(end, close_index)
+    first_prim = _USDA_PRIM_RE.search(stripped, open_index)
+    if first_prim:
+        end = min(end, first_prim.start())
+    block = stripped[open_index + 1 : end]
+
+    match = re.search(r'\bdefaultPrim\s*=\s*"([^"]+)"', block)
+    if match:
+        info["default_prim"] = match.group(1)
+    match = re.search(r'\bupAxis\s*=\s*"([^"]+)"', block)
+    if match:
+        info["up_axis"] = match.group(1)
+    match = re.search(r"\bmetersPerUnit\s*=\s*([-+0-9.eE]+)", block)
+    if match:
+        try:
+            info["meters_per_unit"] = float(match.group(1))
+        except ValueError:
+            info["meters_per_unit"] = match.group(1)
+    match = _SUBLAYER_RE.search(block)
+    if match:
+        info["sublayers"] = [asset for asset in _ASSET_PATH_RE.findall(match.group(1)) if asset]
+    return info
+
+
+def _read_layer_metadata(path: Path) -> Dict[str, Any]:
+    """Read layer-level metadata from a USD layer file.
+
+    Text layers are parsed directly so the pxr and text-fallback runtimes agree;
+    binary layers fall back to pxr when it is installed.
+    """
+    info: Dict[str, Any] = {
+        "file": str(path),
+        "available": False,
+        "binary": False,
+        "header_ok": False,
+        "default_prim": None,
+        "up_axis": None,
+        "meters_per_unit": None,
+        "sublayers": [],
+    }
+    try:
+        raw = path.read_bytes()
+    except OSError:
+        return info
+
+    info["available"] = True
+    info["binary"] = raw[:8] == _BINARY_MAGIC
+    if not info["binary"]:
+        info.update(_parse_usda_metadata(raw.decode("utf-8", errors="replace")))
+        return info
+
+    if detect_runtime().has_pxr:
+        try:
+            from pxr import Sdf  # type: ignore
+
+            layer = Sdf.Layer.FindOrOpen(str(path))
+            if layer is not None:
+                root = Sdf.Path.absoluteRootPath
+                if layer.HasField(root, "upAxis"):
+                    info["up_axis"] = str(layer.upAxis)
+                if layer.HasField(root, "metersPerUnit"):
+                    info["meters_per_unit"] = float(layer.metersPerUnit)
+                if layer.HasField(root, "defaultPrim"):
+                    info["default_prim"] = str(layer.defaultPrim)
+                info["sublayers"] = [str(sub) for sub in layer.subLayerPaths]
+                info["header_ok"] = True
+        except Exception:
+            pass
+    return info
+
+
+def _collect_layer_chain(root: Path, max_layers: int = _MAX_LAYER_WALK) -> List[Dict[str, Any]]:
+    """Return the root layer metadata followed by every reachable sublayer."""
+    chain: List[Dict[str, Any]] = []
+    seen: Set[str] = set()
+    queue: List[Path] = [root]
+    while queue and len(chain) < max_layers:
+        current = queue.pop(0)
+        key = _layer_key(current)
+        if key in seen:
+            continue
+        seen.add(key)
+        meta = _read_layer_metadata(current)
+        chain.append(meta)
+        for sublayer in meta["sublayers"]:
+            queue.append(_resolve_asset_path(current.parent, sublayer))
+    return chain
+
+
+def _layer_key(path: Path) -> str:
+    try:
+        return str(path.resolve()).lower()
+    except OSError:
+        return str(path).lower()
+
+
+def _resolve_asset_path(base_dir: Path, asset_path: str) -> Path:
+    """Resolve a USD asset path against the directory of the layer that owns it."""
+    candidate = asset_path.strip()
+    if not candidate:
+        return base_dir
+    if re.match(r"^[A-Za-z]:[\\/]", candidate) or candidate.startswith(("/", "\\\\")):
+        return Path(candidate)
+    return base_dir / candidate
+
+
+def _is_dynamic_asset_path(asset_path: str) -> bool:
+    """Return True for patterns (UDIM, globs, URIs) that are not plain files."""
+    candidate = asset_path.strip()
+    if any(char in candidate for char in "<>*?"):
+        return True
+    return bool(re.match(r"^[A-Za-z][A-Za-z0-9+.\-]*://", candidate))
+
+
+def _strip_property_suffix(target: str) -> str:
+    """Drop the ``.property`` suffix from a relationship target path."""
+    return target.split(".", 1)[0] or target
+
+
+def _find_reference_paths(body: str) -> List[str]:
+    """Return every asset path authored by a ``references``/``payload`` statement."""
+    assets: List[str] = []
+    for match in _REFERENCE_RE.finditer(body):
+        index = match.end()
+        depth = 0
+        while index < len(body):
+            char = body[index]
+            if char == "[":
+                depth += 1
+            elif char == "]":
+                depth = max(0, depth - 1)
+            elif char == "\n" and depth == 0:
+                break
+            index += 1
+        assets.extend(asset for asset in _ASSET_PATH_RE.findall(body[match.end() : index]) if asset)
+    return assets
+
+
+def _find_binding_targets(body: str) -> List[str]:
+    """Return every target of a ``material:binding`` relationship."""
+    targets: List[str] = []
+    for match in _BINDING_RE.finditer(body):
+        targets.extend(re.findall(r"<([^>]+)>", match.group(1)))
+    return targets
+
+
+def _read_layer_references(path: Path) -> List[str]:
+    """Return every asset path referenced or payloaded by a layer file."""
+    try:
+        raw = path.read_bytes()
+    except OSError:
+        return []
+    if raw[:8] == _BINARY_MAGIC:
+        return []
+    return _find_reference_paths(_strip_usda_comments(raw.decode("utf-8", errors="replace")))
+
+
+def _detect_reference_cycle(root: Path) -> Optional[str]:
+    """Return the file name closing a reference cycle, or ``None``."""
+    visited: Set[str] = set()
+    stack: List[str] = []
+
+    def walk(layer: Path, depth: int) -> Optional[str]:
+        if depth > _MAX_LAYER_WALK:
+            return None
+        key = _layer_key(layer)
+        if key in stack:
+            return layer.name
+        if key in visited:
+            return None
+        visited.add(key)
+        stack.append(key)
+        try:
+            for asset in _read_layer_references(layer):
+                if _is_dynamic_asset_path(asset):
+                    continue
+                found = walk(_resolve_asset_path(layer.parent, asset), depth + 1)
+                if found:
+                    return found
+        finally:
+            stack.pop()
+        return None
+
+    return walk(root, 0)
 
 
 def _existing_file(path: str) -> Path:
