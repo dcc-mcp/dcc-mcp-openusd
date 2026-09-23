@@ -95,7 +95,7 @@ jobs:
         run: python -m pytest tests/ --ignore=tests/e2e
 
   test-openusd:
-    name: OpenUSD (with pxr) — E2E Golden Paths
+    name: OpenUSD (with pxr) — Runtime Parity + E2E Golden Paths
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -116,6 +116,8 @@ jobs:
         run: |
           dcc-mcp-openusd verify --json > doctor-pxr.json
           python -c 'import json; report=json.load(open("doctor-pxr.json", encoding="utf-8")); assert report["exit_code"] == 0; assert report["runtime"]["mode"] == "pxr"; assert report["runtime"]["full_capabilities"] is True; assert report["runtime"]["verification"]["result"] == "ready"'
+      - name: Run the full unit suite with pxr (validate_stage runtime parity)
+        run: python -m pytest tests/ -v
       - name: Run e2e golden path tests
         run: python -m pytest tests/e2e/ -v
 

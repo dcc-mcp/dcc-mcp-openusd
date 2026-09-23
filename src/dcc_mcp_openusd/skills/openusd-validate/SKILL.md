@@ -23,9 +23,15 @@ Validate authored stages and package them for handoff.
 ## `validate_stage`
 
 Runs the same rule set whether or not the Pixar USD (`pxr`) package is
-installed. `pxr` is only used to read composition facts (prim tree, references,
-material bindings); every rule itself is shared, so a stage is judged
-identically by the `pxr` and `text-fallback` runtimes.
+installed. `pxr` is only used to parse the file (`Sdf.Layer`); every rule is
+shared, so a stage is judged identically by the `pxr` and `text-fallback`
+runtimes.
+
+Both runtimes report facts for the **root layer only** — prims composed in
+from references and sublayers are out of scope. That keeps the two collectors
+equivalent and means reference asset paths always resolve against the root
+layer's directory. Layer-level metadata (`upAxis`, `metersPerUnit`) is still
+compared across the whole `subLayers` chain.
 
 Each issue is `{code, severity, message, location}`. `location` is either a
 prim path (`/World/Prop`) or a `[...]` layer marker (`[unit_mismatch_sublayer.usda]`,

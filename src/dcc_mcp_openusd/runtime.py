@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import re
 import shutil
 import time
@@ -440,6 +441,7 @@ class _StageFacts:
 
     @property
     def stage_dir(self) -> Path:
+        """Directory that relative asset paths resolve against."""
         return self.stage_path.parent if self.stage_path else Path(".")
 
 
@@ -494,38 +496,97 @@ def validate_stage(stage_file: str, strict: bool = False) -> Dict[str, Any]:
 
 
 def _collect_facts_pxr(path: Path, chain: List[Dict[str, Any]]) -> _StageFacts:
-    """Collect stage facts through the Pixar USD bindings."""
-    from pxr import Usd  # type: ignore
+    """Collect root-layer facts through the Pixar USD bindings.
+
+    The walk is deliberately limited to the prim specs *authored in the root
+    layer*. ``Usd.Stage.Traverse()`` would additionally report prims composed in
+    from references and sublayers, which the text-fallback collector cannot see;
+    restricting both collectors to the root layer is what keeps their facts
+    equivalent. Because every asset path is then authored in the root layer,
+    they are all resolved against the root layer's directory.
+    """
+    from pxr import Sdf  # type: ignore
 
     facts = _StageFacts(stage_path=path, layer_chain=chain)
     facts.header_ok = bool(chain and chain[0].get("header_ok"))
     facts.binary_layer = bool(chain and chain[0].get("binary"))
 
-    stage = Usd.Stage.Open(str(path))
-    if stage is None:
+    layer = Sdf.Layer.FindOrOpen(str(path))
+    if layer is None:
         raise OpenUsdError(f"Could not open stage: {path}")
 
-    for prim in stage.Traverse():
-        prim_path = str(prim.GetPath())
-        prim_type = prim.GetTypeName() or ""
+    for spec, descendants in _walk_layer_prim_specs(layer):
+        prim_path = str(spec.path)
+        prim_type = spec.typeName or ""
         facts.prim_types[prim_path] = prim_type
-        if not prim_type:
+        if spec.specifier == Sdf.SpecifierDef and not prim_type:
             facts.untyped_prims.add(prim_path)
         if prim_type == "Material":
-            facts.materials[prim_path] = _material_has_surface_pxr(prim)
-        for asset in _pxr_composition_assets(prim):
+            facts.materials[prim_path] = "outputs:surface" in spec.properties or any(
+                child.typeName == "Shader" for child in descendants
+            )
+        for asset in _spec_composition_assets(spec):
             facts.references.append((prim_path, asset))
-        for relationship in prim.GetRelationships():
-            if relationship.GetName() != "material:binding":
+        for name, property_spec in spec.properties.items():
+            if not _is_material_binding_name(str(name)):
                 continue
-            for target in relationship.GetTargets():
+            targets = getattr(property_spec, "targetPathList", None)
+            if targets is None:
+                continue
+            for target in targets.GetAppliedItems():
                 facts.bindings.append((prim_path, _strip_property_suffix(str(target))))
 
     return facts
 
 
+def _walk_layer_prim_specs(layer: Any) -> List[Tuple[Any, List[Any]]]:
+    """Return ``(spec, all_descendant_specs)`` for every prim spec in a layer.
+
+    Pre-order depth first, so the ordering matches a textual scan of the file.
+    """
+    ordered: List[Tuple[Any, List[Any]]] = []
+    stack: List[Tuple[Any, bool]] = [(spec, False) for spec in reversed(list(layer.rootPrims))]
+    ancestors: List[Any] = []
+    while stack:
+        spec, is_exit = stack.pop()
+        if is_exit:
+            ancestors.pop()
+            continue
+        descendants: List[Any] = []
+        for child in spec.nameChildren:
+            descendants.append(child)
+        ordered.append((spec, list(descendants)))
+        ancestors.append(spec)
+        stack.append((spec, True))
+        for child in reversed(list(spec.nameChildren)):
+            stack.append((child, False))
+    return ordered
+
+
+def _spec_composition_assets(spec: Any) -> List[str]:
+    """Return reference/payload asset paths authored on a prim spec."""
+    assets: List[str] = []
+    for list_editor in (spec.referenceList, spec.payloadList):
+        try:
+            items = list(list_editor.GetAppliedItems())
+        except Exception:
+            try:
+                items = list(list_editor.GetAddedOrExplicitItems())
+            except Exception:
+                items = []
+        for item in items:
+            asset = getattr(item, "assetPath", "") or ""
+            if asset:
+                assets.append(asset)
+    return assets
+
+
 def _collect_facts_text(path: Path, chain: List[Dict[str, Any]]) -> _StageFacts:
-    """Collect stage facts by parsing USDA text."""
+    """Collect root-layer facts by parsing USDA text.
+
+    Mirrors :func:`_collect_facts_pxr`: only the prims authored in this file are
+    reported, and asset paths are resolved against this file's directory.
+    """
     facts = _StageFacts(stage_path=path, layer_chain=chain)
     facts.header_ok = bool(chain and chain[0].get("header_ok"))
     facts.binary_layer = bool(chain and chain[0].get("binary"))
@@ -549,49 +610,24 @@ def _collect_facts_text(path: Path, chain: List[Dict[str, Any]]) -> _StageFacts:
     return facts
 
 
-def _pxr_composition_assets(prim: Any) -> List[str]:
-    """Return authored reference/payload asset paths on a pxr prim."""
-    assets: List[str] = []
-    for field_name in ("references", "payload"):
-        try:
-            list_op = prim.GetMetadata(field_name)
-        except Exception:
-            continue
-        if list_op is None:
-            continue
-        try:
-            items = list(list_op.GetAppliedItems())
-        except Exception:
-            items = []
-        for item in items:
-            asset = getattr(item, "assetPath", "") or ""
-            if asset:
-                assets.append(asset)
-    return assets
-
-
-def _material_has_surface_pxr(prim: Any) -> bool:
-    """Return True when a pxr Material prim has a surface output or a shader."""
-    try:
-        from pxr import Usd, UsdShade  # type: ignore
-
-        surface = UsdShade.Material(prim).GetSurfaceOutput()
-        if surface is not None and surface.HasConnectedSource():
-            return True
-        for descendant in Usd.PrimRange(prim):
-            if descendant.GetPath() != prim.GetPath() and descendant.GetTypeName() == "Shader":
-                return True
-    except Exception:
-        return True
-    return False
-
-
 def _material_has_surface_text(material_path: str, own_text: str, blocks: List[Dict[str, Any]]) -> bool:
     """Return True when a USDA Material prim has a surface output or a shader."""
     if re.search(r"\boutputs:surface\b", own_text):
         return True
     prefix = material_path + "/"
     return any(block["path"].startswith(prefix) and block["type"] == "Shader" for block in blocks)
+
+
+def _is_material_binding_name(name: str) -> bool:
+    """Return True for ``material:binding`` and its per-purpose variants.
+
+    ``material:binding:collection:<name>`` is excluded: it targets a collection,
+    not a material, so it must not be treated as a material binding. Both
+    collectors share this filter so pxr and the text fallback agree.
+    """
+    if name == "material:binding":
+        return True
+    return name.startswith("material:binding:") and not name.startswith("material:binding:collection")
 
 
 def _run_validators(facts: _StageFacts, strict: bool) -> List[Dict[str, str]]:
@@ -792,6 +828,7 @@ def _find_prim_opening_brace(text: str, prim_path: str) -> int | None:
 
 
 def _minimal_usda(name: str, up_axis: str, meters_per_unit: float) -> str:
+    """Return the USDA text of a minimal stage used by the text fallback."""
     safe_name = _safe_name(name)
     return (
         "#usda 1.0\n"
@@ -902,6 +939,7 @@ def _parse_prims_from_usda(text: str) -> List[Dict[str, Any]]:
 
 
 def _find_default_prim(text: str) -> Optional[str]:
+    """Return the defaultPrim name authored anywhere in USDA text."""
     match = re.search(r'defaultPrim\s*=\s*"([^"]+)"', text)
     return match.group(1) if match else None
 
@@ -967,18 +1005,66 @@ def _strip_usda_comments(text: str) -> str:
     return "".join(out)
 
 
-def _matching_brace(text: str, open_index: int) -> int:
-    """Return the index of the brace closing the one at *open_index*, or -1."""
+def _skip_usda_token(text: str, index: int) -> int:
+    """Return the index just past the quoted string or asset path at *index*."""
+    char = text[index]
+    if char == "@":
+        delimiter = "@@" if text.startswith("@@", index) else "@"
+        end = text.find(delimiter, index + len(delimiter))
+        return len(text) if end == -1 else end + len(delimiter)
+    end = index + 1
+    while end < len(text):
+        if text[end] == "\\":
+            end += 2
+            continue
+        if text[end] == char:
+            return end + 1
+        end += 1
+    return len(text)
+
+
+def _matching_delimiter(text: str, open_index: int, open_char: str, close_char: str) -> int:
+    """Return the index of the delimiter closing the one at *open_index*, or -1.
+
+    Delimiters inside quoted strings and ``@asset@`` paths are ignored, so
+    dictionary values such as ``customData = { string a = ")" }`` or sublayer
+    offsets such as ``[@./x.usda@ (offset = 1)]`` do not terminate the scan.
+    """
     depth = 0
-    for index in range(open_index, len(text)):
+    index = open_index
+    while index < len(text):
         char = text[index]
-        if char == "{":
+        if char == '"' or char == "'" or char == "@":
+            index = _skip_usda_token(text, index)
+            continue
+        if char == open_char:
             depth += 1
-        elif char == "}":
+        elif char == close_char:
             depth -= 1
             if depth == 0:
                 return index
+        index += 1
     return -1
+
+
+def _skip_prim_metadata(text: str, index: int) -> int:
+    """Return *index* advanced past any balanced ``( ... )`` prim metadata.
+
+    A prim header may carry dictionaries (``customData = { ... }``,
+    ``assetInfo = { ... }``) inside its metadata block, so the body brace cannot
+    be found by scanning for the first ``{``. Every balanced paren group at the
+    start of the header is skipped first.
+    """
+    while index < len(text):
+        probe = index
+        while probe < len(text) and text[probe] in " \t\r\n":
+            probe += 1
+        if probe >= len(text) or text[probe] != "(":
+            return index
+        close = _matching_delimiter(text, probe, "(", ")")
+        if close == -1:
+            return index
+        index = close + 1
 
 
 def _parse_usda_blocks(text: str) -> List[Dict[str, Any]]:
@@ -1009,10 +1095,15 @@ def _parse_usda_blocks(text: str) -> List[Dict[str, Any]]:
         path = "/" + "/".join(stack + [name])
         stack.append(name)
 
-        brace = stripped.find("{", match.end())
+        header_end = _skip_prim_metadata(stripped, match.end())
+        brace = stripped.find("{", header_end)
         if brace == -1:
             continue
-        close = _matching_brace(stripped, brace)
+        # A prim whose next sibling starts before any brace has no body.
+        next_prim = _USDA_PRIM_RE.search(stripped, header_end)
+        if next_prim is not None and next_prim.start() < brace:
+            continue
+        close = _matching_delimiter(stripped, brace, "{", "}")
         if close == -1:
             close = len(stripped)
         blocks.append(
@@ -1064,8 +1155,11 @@ def _parse_usda_metadata(text: str) -> Dict[str, Any]:
     if open_index == -1:
         return info
 
+    # Match the closing paren instead of taking the first one: sublayer offsets
+    # are written as [@./x.usda@ (offset = 1; scale = 2)], which contains its
+    # own ')'. Quoted strings and asset paths are skipped while scanning.
     end = len(stripped)
-    close_index = stripped.find(")", open_index)
+    close_index = _matching_delimiter(stripped, open_index, "(", ")")
     if close_index != -1:
         end = min(end, close_index)
     first_prim = _USDA_PRIM_RE.search(stripped, open_index)
@@ -1157,10 +1251,15 @@ def _collect_layer_chain(root: Path, max_layers: int = _MAX_LAYER_WALK) -> List[
 
 
 def _layer_key(path: Path) -> str:
+    """Return a comparable identity for a layer file.
+
+    ``os.path.normcase`` is used instead of a blanket ``.lower()`` so that
+    case-sensitive filesystems keep ``Set.usda`` and ``set.usda`` apart.
+    """
     try:
-        return str(path.resolve()).lower()
+        return os.path.normcase(str(path.resolve()))
     except OSError:
-        return str(path).lower()
+        return os.path.normcase(str(path))
 
 
 def _resolve_asset_path(base_dir: Path, asset_path: str) -> Path:
@@ -1206,9 +1305,15 @@ def _find_reference_paths(body: str) -> List[str]:
 
 
 def _find_binding_targets(body: str) -> List[str]:
-    """Return every target of a ``material:binding`` relationship."""
+    """Return every target of a material binding relationship.
+
+    Shares :func:`_is_material_binding_name` with the pxr collector so both
+    runtimes accept the same set of relationship names.
+    """
     targets: List[str] = []
     for match in _BINDING_RE.finditer(body):
+        if not _is_material_binding_name(match.group(0).split("=")[0].strip()):
+            continue
         targets.extend(re.findall(r"<([^>]+)>", match.group(1)))
     return targets
 
@@ -1254,6 +1359,7 @@ def _detect_reference_cycle(root: Path) -> Optional[str]:
 
 
 def _existing_file(path: str) -> Path:
+    """Resolve *path* and raise OpenUsdError when it is not an existing file."""
     resolved = Path(path).expanduser().resolve()
     if not resolved.exists() or not resolved.is_file():
         raise OpenUsdError(f"Stage file does not exist: {resolved}")
@@ -1261,6 +1367,7 @@ def _existing_file(path: str) -> Path:
 
 
 def _normalize_axis(value: str) -> str:
+    """Validate an up-axis token and return it upper-cased."""
     axis = value.upper()
     if axis not in {"X", "Y", "Z"}:
         raise OpenUsdError("up_axis must be X, Y, or Z")
@@ -1268,6 +1375,7 @@ def _normalize_axis(value: str) -> str:
 
 
 def _normalize_prim_path(value: str) -> str:
+    """Validate an absolute Sdf prim path."""
     if not value.startswith("/"):
         raise OpenUsdError("prim_path must be absolute, for example /World/Asset")
     if "//" in value or value == "/":
@@ -1276,11 +1384,13 @@ def _normalize_prim_path(value: str) -> str:
 
 
 def _safe_name(value: str) -> str:
+    """Convert an arbitrary label into a USDA-safe identifier."""
     cleaned = re.sub(r"[^A-Za-z0-9_.-]+", "_", value.strip()).strip("._")
     return cleaned or "openusd_project"
 
 
 def _relative_asset_path(stage_dir: Path, asset: Path) -> str:
+    """Return *asset* relative to *stage_dir*, falling back to the absolute path."""
     try:
         return asset.resolve().relative_to(stage_dir.resolve()).as_posix()
     except Exception:

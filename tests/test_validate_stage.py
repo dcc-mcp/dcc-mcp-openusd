@@ -30,18 +30,42 @@ REAL_HAS_PXR = detect_runtime().has_pxr
 DATA_DIR = Path(__file__).parent / "data" / "usd"
 
 BROKEN_REFERENCE = DATA_DIR / "broken_reference.usda"
+CUSTOM_DATA_PRIM = DATA_DIR / "custom_data_prim.usda"
+NESTED_REFERENCE = DATA_DIR / "nested_reference.usda"
+PURPOSE_BINDING = DATA_DIR / "purpose_binding.usda"
+SUBLAYER_OFFSET = DATA_DIR / "sublayer_offset.usda"
 UNIT_MISMATCH = DATA_DIR / "unit_mismatch.usda"
 UNBOUND_MATERIAL = DATA_DIR / "unbound_material.usda"
+
+#: Every sample stage the parity test compares across runtimes.
+SAMPLES = (
+    BROKEN_REFERENCE,
+    CUSTOM_DATA_PRIM,
+    NESTED_REFERENCE,
+    PURPOSE_BINDING,
+    SUBLAYER_OFFSET,
+    UNIT_MISMATCH,
+    UNBOUND_MATERIAL,
+)
 
 
 @pytest.fixture(params=["pxr", "text-fallback"])
 def runtime_mode(request, monkeypatch):
-    """Run the test once per runtime by forcing the detected runtime."""
+    """Run the test once per runtime by forcing the detected runtime.
+
+    The "pxr" parametrisation skips loudly when ``usd-core`` is absent: without
+    it validate_stage degrades to the text collector, and the two
+    parametrisations would silently compare text against text. CI runs this
+    module in the ``test-openusd`` job, where pxr is installed.
+    """
+    mode = request.param
+    if mode == "pxr" and not REAL_HAS_PXR:
+        pytest.skip("pxr runtime requested but usd-core is not installed")  # noqa: B028
     monkeypatch.setattr(
         "dcc_mcp_openusd.runtime._RUNTIME_INFO",
-        RuntimeInfo(has_pxr=request.param == "pxr"),
+        RuntimeInfo(has_pxr=mode == "pxr"),
     )
-    return request.param
+    return mode
 
 
 def codes(result) -> set:
@@ -81,12 +105,24 @@ def test_issue_objects_keep_severity_and_message_and_add_code_and_location(runti
 
 
 def test_pxr_and_fallback_report_the_same_codes_on_every_fixture():
-    """Both runtimes must run the same rules over the same sample stages."""
-    for sample in (BROKEN_REFERENCE, UNIT_MISMATCH, UNBOUND_MATERIAL):
+    """Both runtimes must run the same rules over the same sample stages.
+
+    This is the only test that can prove the shared-rule-set claim, so it skips
+    loudly instead of passing vacuously when ``usd-core`` is unavailable.
+    """
+    if not REAL_HAS_PXR:
+        pytest.skip("runtime parity requires usd-core; the test-openusd CI job provides it")  # noqa: B028
+
+    for sample in SAMPLES:
         pxr_result = _validate_with(sample, has_pxr=True)
         fallback_result = _validate_with(sample, has_pxr=False)
+        assert pxr_result["runtime"] == "pxr", sample.name
+        assert fallback_result["runtime"] == "text-fallback", sample.name
         assert codes(pxr_result) == codes(fallback_result), sample.name
         assert [i["severity"] for i in pxr_result["issues"]] == [i["severity"] for i in fallback_result["issues"]], (
+            sample.name
+        )
+        assert [i["location"] for i in pxr_result["issues"]] == [i["location"] for i in fallback_result["issues"]], (
             sample.name
         )
 
@@ -120,8 +156,7 @@ def test_runtime_label_matches_the_forced_runtime(runtime_mode, tmp_path):
     stage_file = tmp_path / "scene.usda"
     create_stage(str(stage_file), name="runtime-label")
     result = validate_stage(str(stage_file))
-    expected = "pxr" if (runtime_mode == "pxr" and REAL_HAS_PXR) else "text-fallback"
-    assert result["runtime"] == expected
+    assert result["runtime"] == runtime_mode
 
 
 # ── high-frequency error 1: broken references ───────────────────────────────
@@ -465,3 +500,138 @@ def test_validate_stage_tool_contract_is_unchanged():
     assert set(tool["input_schema"]["properties"]) == {"stage_file", "strict"}
     assert tool["input_schema"]["properties"]["strict"]["default"] is False
     assert tool["source_file"] == "scripts/validate_stage.py"
+
+
+# ── collector equivalence regressions ──────────────────────────────────────
+#
+# Each test below pins one defect that made the pxr and text collectors disagree
+# while the parity test was passing vacuously. They are grouped by the review
+# finding they close.
+
+
+def test_prim_header_dictionary_does_not_swallow_the_body(runtime_mode):
+    """A ``customData = { ... }`` header must not shift the prim body.
+
+    The body brace used to be located with the first ``{``, which landed inside
+    the header dictionary; the real body then leaked into the parent prim and
+    the broken reference was reported against /World instead of /World/Body.
+    """
+    result = validate_stage(str(CUSTOM_DATA_PRIM))
+
+    issue = issue_for(result, "UNRESOLVED_REFERENCE")
+    assert issue["location"] == "/World/Body"
+    # The prim header dictionary also carries the binding, which must be seen.
+    assert "DANGLING_MATERIAL_BINDING" not in codes(result)
+
+
+def test_sublayer_offset_does_not_truncate_layer_metadata(runtime_mode):
+    """``subLayers = [@x@ (offset = N)]`` must not cut the metadata block.
+
+    Stopping at the first ``)`` dropped ``upAxis``, which produced a false
+    MISSING_UP_AXIS and hid the real UP_AXIS_MISMATCH.
+    """
+    result = validate_stage(str(SUBLAYER_OFFSET), strict=True)
+
+    assert "MISSING_UP_AXIS" not in codes(result)
+    assert "MISSING_METERS_PER_UNIT" not in codes(result)
+    assert issue_for(result, "UP_AXIS_MISMATCH")["location"] == "[sublayer_offset_sub.usda]"
+    assert issue_for(result, "METERS_PER_UNIT_MISMATCH")["severity"] == "error"
+
+
+def test_resolvable_nested_reference_is_not_reported(runtime_mode):
+    """A reference authored in a nested layer resolves against its own layer.
+
+    Every asset path is authored in the root layer and therefore resolved
+    against the root layer directory; resolving a nested layer's relative path
+    against the root directory produced a false UNRESOLVED_REFERENCE.
+    """
+    result = validate_stage(str(NESTED_REFERENCE))
+
+    assert "UNRESOLVED_REFERENCE" not in codes(result)
+    assert "REFERENCE_CYCLE" not in codes(result)
+
+
+def test_purpose_specific_binding_counts_as_bound(runtime_mode):
+    """``material:binding:preview`` binds the material in both runtimes.
+
+    pxr used to accept only the exact ``material:binding`` name, so a stage
+    bound by purpose alone got a spurious UNBOUND_MATERIAL warning.
+    """
+    result = validate_stage(str(PURPOSE_BINDING))
+
+    assert "UNBOUND_MATERIAL" not in codes(result)
+    assert "INCOMPLETE_MATERIAL" not in codes(result)
+
+
+def test_collection_binding_is_not_treated_as_a_material_binding(runtime_mode):
+    """``material:binding:collection:*`` targets a collection, not a material.
+
+    Both runtimes must ignore it — otherwise the dangling collection target in
+    the sample stage would be reported as DANGLING_MATERIAL_BINDING.
+    """
+    result = validate_stage(str(PURPOSE_BINDING))
+
+    assert "DANGLING_MATERIAL_BINDING" not in codes(result)
+
+
+def test_binding_name_filter_is_shared_by_both_collectors():
+    """The pxr and text collectors must accept the same relationship names."""
+    from dcc_mcp_openusd.runtime import _is_material_binding_name
+
+    assert _is_material_binding_name("material:binding")
+    assert _is_material_binding_name("material:binding:preview")
+    assert _is_material_binding_name("material:binding:full")
+    assert not _is_material_binding_name("material:binding:collection:proxy")
+    assert not _is_material_binding_name("material:binding:collection")
+    assert not _is_material_binding_name("material:displacement")
+
+
+def test_layer_key_respects_case_sensitive_filesystems(tmp_path):
+    """Distinct files that differ only by case must not be merged.
+
+    ``_layer_key`` used to lowercase unconditionally, which merged ``Set.usda``
+    and ``set.usda`` into one node and reported a false REFERENCE_CYCLE.
+    """
+    from dcc_mcp_openusd.runtime import _layer_key
+
+    upper = tmp_path / "Set.usda"
+    lower = tmp_path / "set.usda"
+    if _layer_key(upper) == _layer_key(lower):
+        pytest.skip("this filesystem is case-insensitive")  # noqa: B028
+
+    root = tmp_path / "scene.usda"
+    root.write_text(
+        '#usda 1.0\n(\n    defaultPrim = "World"\n    metersPerUnit = 1\n    upAxis = "Y"\n)\n\n'
+        'def Xform "World"\n{\n}\n',
+        encoding="utf-8",
+    )
+    result = validate_stage(str(root))
+    assert "REFERENCE_CYCLE" not in codes(result)
+
+
+def test_referenced_prims_are_out_of_scope_for_both_collectors(runtime_mode, tmp_path):
+    """Prims composed in from a reference are not reported by either runtime.
+
+    pxr used to traverse the composed stage while the text collector only saw
+    the root layer, so material and defaultPrim facts diverged.
+    """
+    asset = tmp_path / "asset.usda"
+    asset.write_text(
+        '#usda 1.0\n(\n    defaultPrim = "Asset"\n)\n\n'
+        'def Xform "Asset"\n{\n    def Material "AssetMat"\n    {\n    }\n}\n',
+        encoding="utf-8",
+    )
+    stage_file = tmp_path / "scene.usda"
+    stage_file.write_text(
+        '#usda 1.0\n(\n    defaultPrim = "World"\n    metersPerUnit = 1\n    upAxis = "Y"\n)\n\n'
+        'def Xform "World"\n{\n'
+        '    def Xform "Placed" (\n        prepend references = @./asset.usda@\n    )\n    {\n    }\n'
+        "}\n",
+        encoding="utf-8",
+    )
+
+    result = validate_stage(str(stage_file))
+    # /World/Placed/AssetMat lives in the referenced layer, not the root layer.
+    assert "UNBOUND_MATERIAL" not in codes(result)
+    assert "INCOMPLETE_MATERIAL" not in codes(result)
+    assert result["valid"] is True

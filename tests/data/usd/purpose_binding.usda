@@ -1,0 +1,29 @@
+#usda 1.0
+(
+    defaultPrim = "World"
+    metersPerUnit = 1
+    upAxis = "Y"
+)
+
+def Xform "World"
+{
+    def Scope "Materials"
+    {
+        def Material "PreviewMat"
+        {
+            token outputs:surface.connect = </World/Materials/PreviewMat/Shader.outputs:surface>
+
+            def Shader "Shader"
+            {
+                uniform token info:id = "UsdPreviewSurface"
+                token outputs:surface
+            }
+        }
+    }
+
+    def Mesh "Cube"
+    {
+        rel material:binding:preview = </World/Materials/PreviewMat>
+        rel material:binding:collection:proxy = </World/Materials/CollectionOnly>
+    }
+}
