@@ -105,6 +105,94 @@ def test_fix_reference_path_reports_a_clean_stage(tmp_path):
     assert result["context"]["targets"] == []
 
 
+# ── apply=true must never come back as success when it did not fix anything ─
+
+
+def test_fix_reference_path_fails_when_apply_finds_no_replacement(tmp_path):
+    """apply=true with nothing to write is a failure, not a warning success."""
+    tool = _load_script("openusd-stage/scripts/fix_reference_path.py")
+    stage = tmp_path / "scene.usda"
+    shutil.copyfile(DATA_DIR / "broken_reference.usda", stage)
+
+    result = tool.main(stage_file=str(stage), apply=True)
+
+    assert result["success"] is False, "apply=true promised a fix; warning-success would hide that"
+    assert result["error"] == "reference_unresolved"
+    assert result["context"]["unresolved"]
+    assert stage.read_text(encoding="utf-8") == (DATA_DIR / "broken_reference.usda").read_text(encoding="utf-8")
+
+
+def test_fix_reference_path_dry_run_does_not_claim_a_write(tmp_path):
+    """A dry run that found a replacement must not report a write it never made."""
+    tool = _load_script("openusd-stage/scripts/fix_reference_path.py")
+    stage = tmp_path / "scene.usda"
+    shutil.copyfile(DATA_DIR / "broken_reference.usda", stage)
+    library = tmp_path / "library"
+    library.mkdir()
+    (library / "missing_set_piece.usda").write_text(ASSET_TEMPLATE, encoding="utf-8")
+
+    result = tool.main(stage_file=str(stage), search_dirs=[str(library)])
+
+    assert result["success"] is True, "a dry run is not an error"
+    assert "postcondition" not in result, "no postcondition may claim a write that never happened"
+    assert result["context"].get("warning", "") == ""
+    assert "apply=true" in result["prompt"]
+    assert all(target["status"] == "planned" for target in result["context"]["targets"])
+    assert stage.read_text(encoding="utf-8") == (DATA_DIR / "broken_reference.usda").read_text(encoding="utf-8")
+
+
+def test_fix_reference_path_warns_when_a_prim_filter_matches_nothing(tmp_path):
+    """A filter that matched nothing is not the same as a clean stage."""
+    tool = _load_script("openusd-stage/scripts/fix_reference_path.py")
+    stage = tmp_path / "scene.usda"
+    shutil.copyfile(DATA_DIR / "broken_reference.usda", stage)
+
+    result = tool.main(stage_file=str(stage), prim_path="/World/Nope")
+
+    assert result["success"] is True
+    assert result["context"]["warning"], "an unmatched filter must be flagged"
+    assert "/World/Nope" in result["context"]["warning"]
+
+
+# ── suggest_material_bind failure hints match the actual cause ─────────────
+
+
+def test_missing_arguments_do_not_suggest_installing_pxr(tmp_path):
+    """A missing-argument failure must not send the agent to pip install."""
+    tool = _load_script("openusd-material/scripts/suggest_material_bind.py")
+    stage = tmp_path / "scene.usda"
+    shutil.copyfile(DATA_DIR / "unbound_material.usda", stage)
+
+    result = tool.main(stage_file=str(stage), prim_path="/World/Prop", apply=True)
+
+    assert result["success"] is False
+    assert "prim_path" in result["prompt"] and "material_path" in result["prompt"]
+    assert "usd-core" not in result["prompt"]
+    assert not any("usd-core" in item for item in result["context"]["possible_solutions"])
+
+
+def test_material_filter_that_matches_nothing_warns(tmp_path):
+    """A material filter with no match must not read as a clean stage."""
+    tool = _load_script("openusd-material/scripts/suggest_material_bind.py")
+    stage = tmp_path / "scene.usda"
+    # A healthy stage: the only material is bound, so nothing is left to
+    # suggest and an unmatched filter is the one thing worth reporting.
+    stage.write_text(
+        '#usda 1.0\n(\n    defaultPrim = "World"\n)\n\n'
+        'def Xform "World"\n{\n'
+        '    def Material "Paint"\n    {\n    }\n'
+        '    def Mesh "Prop"\n    {\n        rel material:binding = </World/Paint>\n    }\n'
+        "}\n",
+        encoding="utf-8",
+    )
+
+    result = tool.main(stage_file=str(stage), material_path="/World/Materials/Ghost")
+
+    assert result["success"] is True
+    assert result["context"]["warning"], "an unmatched filter must be flagged"
+    assert "/World/Materials/Ghost" in result["context"]["warning"]
+
+
 # ── suggest_material_bind script ───────────────────────────────────────────
 
 

@@ -52,6 +52,13 @@ search under `search_dirs` (bounded depth, so an asset library cannot turn a
 fix into an unbounded scan). The search is plain filesystem walking — there is
 no asset-library index.
 
+One replacement never stands in for two broken references. A single prim can
+author several (`prepend references = [@a.usda@, @b.usda@]`, or a `references`
+and a `payload` together), and rewriting both to one asset would drop a
+reference while the readback still reported success. Such a call is rejected
+with `status="failed"` before anything is written — including when
+`prim_path` was given, because that filter narrows the prim, not the reference.
+
 Nothing is reported as `fixed` without a replacement that exists on disk:
 
 - an `asset_path` that does not exist is a **failure**, never another broken

@@ -15,6 +15,26 @@ _REASON_PROMPT = {
     "explicit_request": "Apply the requested binding.",
 }
 
+#: Recovery hints keyed by the marker in the failure detail. Installing usd-core
+#: only helps one of the three causes, so the others must not suggest it.
+_CAUSE_HINTS = (
+    (
+        "requires both prim_path and material_path",
+        "Pass both prim_path and material_path, then retry.",
+        ["suggest_material_bind(stage_file, prim_path=..., material_path=..., apply=True)"],
+    ),
+    (
+        "requires the pxr runtime",
+        "Install the pxr runtime, or apply the suggestion through bind_material on a host that has it.",
+        ["python -m pip install 'usd-core>=24.11,<27'"],
+    ),
+    (
+        "not visible after re-reading",
+        "Re-read the stage and confirm the prim and material still exist; the write did not take.",
+        ["openusd_stage__list_stage"],
+    ),
+)
+
 
 def _prompt(suggestions: List[Dict[str, Any]]) -> str:
     for suggestion in suggestions:
@@ -35,19 +55,32 @@ def _summarize(suggestions: List[Dict[str, Any]]) -> str:
     )
 
 
+def _hint_for(detail: str) -> tuple[str, List[str]]:
+    """Pick the prompt and solutions that match the actual failure cause."""
+    for marker, prompt, solutions in _CAUSE_HINTS:
+        if marker in detail:
+            return prompt, solutions
+    return "Check the reported failure and retry.", []
+
+
 @skill_entry
 def main(**kwargs) -> dict:
+    requested_prim = kwargs.get("prim_path") or ""
+    requested_material = kwargs.get("material_path") or ""
+
     result = suggest_material_bind(**kwargs)
     suggestions = result["suggestions"]
     unresolved = result["unresolved"]
     failed = result["failed"]
 
     if failed:
+        detail = failed[0].get("detail", "")
+        prompt, solutions = _hint_for(detail)
         return skill_error(
             "Material binding could not be applied — {}".format(_summarize(failed)),
             "material_bind_failed",
-            prompt="Install usd-core to apply bindings, or bind the material manually.",
-            possible_solutions=["python -m pip install 'usd-core>=24.11,<27'"],
+            prompt=prompt,
+            possible_solutions=solutions,
             stage_file=result["stage_file"],
             suggestions=suggestions,
             failed=failed,
@@ -79,6 +112,22 @@ def main(**kwargs) -> dict:
         )
 
     if not suggestions:
+        # A filter that matched nothing is not the same as a clean stage.
+        if requested_prim or requested_material:
+            filter_text = ", ".join(
+                "{} '{}'".format(name, value)
+                for name, value in (("prim_path", requested_prim), ("material_path", requested_material))
+                if value
+            )
+            return skill_warning(
+                message,
+                warning="No binding issue matched {}".format(filter_text),
+                prompt="Check the prim or material path, or drop the filters to cover the whole stage.",
+                stage_file=result["stage_file"],
+                suggestions=suggestions,
+                prim_path=requested_prim,
+                material_path=requested_material,
+            )
         return skill_success(
             "No material binding suggestions for {}".format(result["stage_file"]),
             stage_file=result["stage_file"],

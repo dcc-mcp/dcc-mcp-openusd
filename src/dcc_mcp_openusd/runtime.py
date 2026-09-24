@@ -400,8 +400,14 @@ _FIX_SKILL_BY_CODE: Dict[str, str] = {
     "UNBOUND_MATERIAL": "openusd_material__suggest_material_bind",
 }
 
-#: Written recovery guidance for codes that have no fix skill yet.
+#: Written recovery guidance for every rule. The three codes that have a fix
+#: skill are listed as well: they are the fallback used when no stage path is
+#: available to build ``suggested_fix`` args from, so ``next_steps`` stays
+#: non-empty for every rule instead of depending on the caller.
 _GUIDANCE_BY_CODE: Dict[str, str] = {
+    "UNRESOLVED_REFERENCE": "Repair the reference asset path or point it at a file that exists",
+    "DANGLING_MATERIAL_BINDING": "Rebind the prim to a Material that exists",
+    "UNBOUND_MATERIAL": "Bind the material to a prim, or delete the material",
     "INVALID_STAGE_HEADER": "Add a '#usda 1.0' header line to the layer",
     "BINARY_LAYER_REQUIRES_PXR": "Install usd-core, then re-run validate_stage",
     "STAGE_OPEN_FAILED": "Repair or replace the layer that cannot be opened",
@@ -952,8 +958,14 @@ def fix_reference_path(
         ]
         return _fix_result(path, runtime, failed)
 
-    if asset_path and not prim_path and len(targets) > 1:
-        detail = "prim_path is required when asset_path is given and several references are broken"
+    if asset_path and len(targets) > 1:
+        # The filter narrows the prim, not the reference: one prim can author
+        # several broken references, and a single asset_path silently collapsing
+        # them into one would drop a reference while still reading back fixed.
+        detail = (
+            "several broken references match this filter; one asset_path can only replace "
+            "one of them, so narrow the filter to a single reference"
+        )
         failed = [
             {
                 "prim_path": target["prim_path"],
@@ -966,16 +978,18 @@ def fix_reference_path(
         ]
         return _fix_result(path, runtime, failed)
 
-    resolved_targets = []
+    # Plan every replacement before writing any of them, so a collision can be
+    # rejected without leaving a half-rewritten layer behind.
+    planned: List[Dict[str, Any]] = []
     for target in targets:
         replacement = explicit
-        candidates = []
+        candidates: List[str] = []
         if replacement is None and search_dirs:
             candidates = _search_asset_candidates(target["basename"], search_dirs)
             if candidates:
                 replacement = Path(candidates[0])
         if replacement is None:
-            resolved_targets.append(
+            planned.append(
                 {
                     "prim_path": target["prim_path"],
                     "asset_path": target["asset_path"],
@@ -985,12 +999,50 @@ def fix_reference_path(
                 }
             )
             continue
-        resolved_targets.append(_rewrite_reference(path, facts, target, replacement, candidates, apply=apply))
+        planned.append(
+            {
+                "target": target,
+                "replacement": replacement,
+                "candidates": candidates,
+                "new_asset": _relative_asset_path(path.parent, replacement),
+            }
+        )
+
+    collapse = _collapsing_replacement(planned)
+    if collapse is not None:
+        prim, new_asset = collapse
+        detail = (
+            "prim '%s' has several broken references that would all be rewritten to '%s'; "
+            "give each one its own replacement" % (prim, new_asset)
+        )
+        failed = [
+            {
+                "prim_path": item["target"]["prim_path"],
+                "asset_path": item["target"]["asset_path"],
+                "status": "failed",
+                "detail": detail,
+                "candidates": item["candidates"],
+            }
+            for item in planned
+            if item.get("status") != "unresolved"
+        ]
+        return _fix_result(path, runtime, failed)
+
+    resolved_targets: List[Dict[str, Any]] = []
+    for item in planned:
+        if item.get("status") == "unresolved":
+            resolved_targets.append(item)
+            continue
+        resolved_targets.append(
+            _rewrite_reference(path, facts, item["target"], item["replacement"], item["candidates"], apply=apply)
+        )
 
     applied = any(target["status"] == "fixed" for target in resolved_targets)
-    verified = applied and all(
-        target.get("verified", False) for target in resolved_targets if target["status"] == "fixed"
-    )
+    unresolved_targets = [target for target in resolved_targets if target["status"] == "unresolved"]
+    failed_targets = [target for target in resolved_targets if target["status"] == "failed"]
+    # Verified means the whole call did what it claimed, not "at least one
+    # target was written".
+    verified = applied and not unresolved_targets and not failed_targets
     return {
         "stage_file": str(path),
         "runtime": runtime,
@@ -1318,22 +1370,45 @@ def _rewrite_reference(
     return entry
 
 
+def _collapsing_replacement(planned: List[Dict[str, Any]]) -> Optional[Tuple[str, str]]:
+    """Return the first ``(prim_path, replacement)`` that two planned targets share.
+
+    Two broken references on one prim are two authorings. Rewriting both to one
+    asset drops one of them, yet the readback would still find that asset on the
+    prim and report both as fixed, so the collision is rejected instead. Returns
+    ``None`` when no two targets collide.
+    """
+    seen: Set[Tuple[str, str]] = set()
+    for item in planned:
+        if item.get("status") == "unresolved":
+            continue
+        key = (item["target"]["prim_path"], item["new_asset"])
+        if key in seen:
+            return key
+        seen.add(key)
+    return None
+
+
 def _replace_reference_asset(text: str, prim_path: str, old_asset: str, new_asset: str) -> Tuple[str, int]:
     """Replace *old_asset* with *new_asset* in the reference statements of one prim.
 
     Only spans the prim owns are rewritten, so a child prim that happens to
-    reference the same broken path keeps its own authoring. Returns
+    reference the same broken path keeps its own authoring. Scanning runs on the
+    comment-masked text so a commented-out reference is left alone. Returns
     ``(text, replacements)``; ``replacements == 0`` means the prim does not
     author *old_asset*, which callers must treat as a failure rather than a
     silent no-op.
     """
-    blocks = _parse_usda_blocks(_mask_usda_comments(text))
+    masked = _mask_usda_comments(text)
+    blocks = _parse_usda_blocks(masked)
     block = next((item for item in blocks if item["path"] == prim_path), None)
     if block is None:
         return text, 0
     spans = []
     for start, end in block["own_spans"]:
-        for asset_start, asset_end, asset in _reference_asset_spans(text[start:end]):
+        # Scan the masked text so a commented-out reference is left alone;
+        # masking preserves every offset, so spans still index into the original.
+        for asset_start, asset_end, asset in _reference_asset_spans(masked[start:end]):
             if asset == old_asset:
                 spans.append((start + asset_start, start + asset_end))
     if not spans:

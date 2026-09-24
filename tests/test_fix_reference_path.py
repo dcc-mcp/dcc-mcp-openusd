@@ -166,8 +166,8 @@ def test_explicit_replacement_must_exist_on_disk(runtime_mode, stage, tmp_path):
     assert BROKEN_ASSET in stage.read_text(encoding="utf-8"), "the stage must be left untouched"
 
 
-def test_explicit_replacement_needs_a_prim_when_several_are_broken(runtime_mode, tmp_path):
-    """An ambiguous explicit replacement is rejected rather than guessed."""
+def test_explicit_replacement_is_rejected_when_several_are_broken(runtime_mode, tmp_path):
+    """An explicit replacement cannot stand in for several broken references."""
     target = tmp_path / "scene.usda"
     other = tmp_path / "other.usda"
     target.write_text(
@@ -184,7 +184,9 @@ def test_explicit_replacement_needs_a_prim_when_several_are_broken(runtime_mode,
 
     assert result["applied"] is False
     assert len(result["failed"]) == 2
-    assert "prim_path is required" in result["failed"][0]["detail"]
+    assert "asset_path" in result["failed"][0]["detail"]
+    assert "gone_a.usda" in target.read_text(encoding="utf-8"), "nothing may be rewritten"
+    assert "gone_b.usda" in target.read_text(encoding="utf-8")
 
 
 def test_apply_is_idempotent(runtime_mode, stage, library):
@@ -224,13 +226,16 @@ def test_rewrite_only_touches_the_prim_that_owns_the_reference(runtime_mode, tmp
 # ── no silent success ──────────────────────────────────────────────────────
 
 
-def test_unknown_prim_is_reported_as_failed(runtime_mode, stage, library):
-    """A prim that does not exist yields a failed target, not an empty success."""
+def test_a_prim_filter_that_matches_nothing_is_not_a_clean_stage(runtime_mode, stage, library):
+    """A filter with no match reports no targets; the stage itself is still broken."""
     result = fix_reference_path(str(stage), prim_path="/World/Nope", search_dirs=[str(library)], apply=True)
 
     assert result["applied"] is False
-    assert not result["targets"], "a prim with no reference is simply not a target"
+    assert not result["targets"], "a prim with no broken reference is simply not a target"
     assert result["failed"] == []
+    # The unfiltered stage still has its broken reference, so "no targets" must
+    # never be read as "the stage is clean".
+    assert find_unresolved_references(str(stage))["count"] == 1
 
 
 def test_unresolved_targets_are_listed_separately(runtime_mode, stage):
@@ -273,3 +278,113 @@ def test_comment_text_is_preserved_by_the_rewrite(runtime_mode, stage, library):
     assert _statuses(result) == {"/World/Piece": "fixed"}
     assert "# set dressing lives here" in text
     assert "# fix me" in text
+
+
+# ── one replacement cannot stand in for several broken references ───────────
+
+
+def _two_references_on_one_prim(tmp_path) -> Path:
+    """A stage whose single prim authors two broken references."""
+    target = tmp_path / "scene.usda"
+    target.write_text(
+        '#usda 1.0\n(\n    defaultPrim = "World"\n)\n\n'
+        'def Xform "World"\n{\n'
+        '    def Xform "A" (\n        prepend references = [@./gone_a.usda@, @./gone_b.usda@]\n    )\n'
+        "    {\n    }\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    return target
+
+
+def test_asset_path_is_rejected_for_two_references_on_one_prim(runtime_mode, tmp_path):
+    """Giving prim_path must not bypass the ambiguity guard.
+
+    The filter narrows the *prim*, not the reference: one prim can author
+    several broken references, and a single asset_path silently collapsing them
+    into one would drop a reference while still reading back as fixed.
+    """
+    target = _two_references_on_one_prim(tmp_path)
+    replacement = tmp_path / "replacement.usda"
+    replacement.write_text(ASSET_TEMPLATE, encoding="utf-8")
+
+    result = fix_reference_path(str(target), prim_path="/World/A", asset_path=str(replacement), apply=True)
+
+    assert result["applied"] is False
+    assert result["failed"], "two broken references must not be collapsed into one"
+    assert "gone_a.usda" in target.read_text(encoding="utf-8")
+    assert "gone_b.usda" in target.read_text(encoding="utf-8")
+
+
+def test_search_hit_is_rejected_when_it_would_collapse_two_references(runtime_mode, tmp_path):
+    """The same collapse via search_dirs is rejected before anything is written."""
+    target = tmp_path / "scene.usda"
+    # Two references with the same basename in different directories: a
+    # basename search can only ever return one candidate for both.
+    target.write_text(
+        '#usda 1.0\n(\n    defaultPrim = "World"\n)\n\ndef Xform "World"\n{\n    def Xform "A" (\n        prepend references = [@./x/gone.usda@, @./y/gone.usda@]\n    )\n    {\n    }\n}',
+        encoding="utf-8",
+    )
+    library = tmp_path / "library"
+    library.mkdir()
+    (library / "gone.usda").write_text(ASSET_TEMPLATE, encoding="utf-8")
+
+    result = fix_reference_path(str(target), search_dirs=[str(library)], apply=True)
+
+    assert result["applied"] is False
+    assert result["failed"], "one search hit cannot replace two distinct references"
+    text = target.read_text(encoding="utf-8")
+    assert "@./x/gone.usda@" in text and "@./y/gone.usda@" in text
+
+
+def test_distinct_replacements_do_not_collide(runtime_mode, tmp_path):
+    """Distinct replacements for one prim's two references are still accepted."""
+    target = _two_references_on_one_prim(tmp_path)
+    replacement = tmp_path / "replacement.usda"
+    replacement.write_text(ASSET_TEMPLATE, encoding="utf-8")
+
+    first = fix_reference_path(str(target), prim_path="/World/A", asset_path=str(replacement), apply=True)
+    assert first["failed"], "the ambiguous case is still rejected first"
+
+    # Fixing them one at a time is possible because each pass sees one target.
+    text = target.read_text(encoding="utf-8").replace("@./gone_a.usda@", "@./replacement.usda@")
+    target.write_text(text, encoding="utf-8")
+    (tmp_path / "replacement.usda").write_text(ASSET_TEMPLATE, encoding="utf-8")
+
+    second = fix_reference_path(str(target), prim_path="/World/A", asset_path=str(replacement), apply=True)
+    assert second["applied"] is True
+    assert second["failed"] == []
+
+
+def test_verified_is_false_when_any_target_failed(runtime_mode, tmp_path):
+    """A partial fix does not report top-level verified success."""
+    target = _two_references_on_one_prim(tmp_path)
+    replacement = tmp_path / "replacement.usda"
+    replacement.write_text(ASSET_TEMPLATE, encoding="utf-8")
+
+    result = fix_reference_path(str(target), prim_path="/World/A", asset_path=str(replacement), apply=True)
+    assert result["verified"] is False
+
+
+# ── commented-out references are left alone ────────────────────────────────
+
+
+def test_commented_out_reference_is_not_rewritten(runtime_mode, tmp_path, library):
+    """Only live references are rewritten; a commented-out one keeps its text."""
+    target = tmp_path / "scene.usda"
+    target.write_text(
+        '#usda 1.0\n(\n    defaultPrim = "World"\n)\n\n'
+        'def Xform "World"\n{\n'
+        "    # prepend references = @./assets/missing_set_piece.usda@\n"
+        '    def Xform "Piece" (\n'
+        "        prepend references = @./assets/missing_set_piece.usda@\n"
+        "    )\n    {\n    }\n"
+        "}\n",
+        encoding="utf-8",
+    )
+
+    result = fix_reference_path(str(target), prim_path="/World/Piece", search_dirs=[str(library)], apply=True)
+    text = target.read_text(encoding="utf-8")
+
+    assert _statuses(result) == {"/World/Piece": "fixed"}
+    assert "# prepend references = @./assets/missing_set_piece.usda@" in text
