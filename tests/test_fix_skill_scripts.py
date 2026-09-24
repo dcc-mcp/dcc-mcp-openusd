@@ -193,6 +193,83 @@ def test_material_filter_that_matches_nothing_warns(tmp_path):
     assert "/World/Materials/Ghost" in result["context"]["warning"]
 
 
+# ── a second apply must stay a success (idempotency) ───────────────────────
+
+
+def test_fix_reference_path_is_idempotent_at_the_envelope_level(tmp_path):
+    """Running apply=true twice is a success both times, not an error on the second."""
+    tool = _load_script("openusd-stage/scripts/fix_reference_path.py")
+    stage = tmp_path / "scene.usda"
+    shutil.copyfile(DATA_DIR / "broken_reference.usda", stage)
+    library = tmp_path / "library"
+    library.mkdir()
+    (library / "missing_set_piece.usda").write_text(ASSET_TEMPLATE, encoding="utf-8")
+
+    first = tool.main(stage_file=str(stage), search_dirs=[str(library)], apply=True)
+    assert first["success"] is True, "the first apply fixes the reference"
+
+    second = tool.main(stage_file=str(stage), search_dirs=[str(library)], apply=True)
+    assert second["success"] is True, "a second apply has nothing left to do, which is not a failure"
+    assert second["error"] is None
+    assert second["context"]["targets"] == []
+    assert "No broken references" in second["message"]
+
+
+def test_apply_on_a_clean_stage_is_a_success(tmp_path):
+    """apply=true over a stage that was never broken is a success."""
+    tool = _load_script("openusd-stage/scripts/fix_reference_path.py")
+    stage = tmp_path / "scene.usda"
+    shutil.copyfile(DATA_DIR / "broken_reference.usda", stage)
+    (tmp_path / "assets").mkdir()
+    shutil.copyfile(DATA_DIR / "broken_reference.usda", tmp_path / "assets" / "missing_set_piece.usda")
+
+    result = tool.main(stage_file=str(stage), apply=True)
+
+    assert result["success"] is True
+    assert result["context"].get("warning", "") == ""
+
+
+def test_filter_miss_warns_under_apply_too(tmp_path):
+    """The unmatched-filter warning is reachable whether or not apply was asked for."""
+    tool = _load_script("openusd-stage/scripts/fix_reference_path.py")
+    stage = tmp_path / "scene.usda"
+    shutil.copyfile(DATA_DIR / "broken_reference.usda", stage)
+
+    result = tool.main(stage_file=str(stage), prim_path="/World/Nope", apply=True)
+
+    assert result["success"] is True, "a filter that missed is not a failed fix"
+    assert result["context"]["warning"]
+    assert "/World/Nope" in result["context"]["warning"]
+
+
+def test_collision_keeps_unrelated_unresolved_targets(tmp_path):
+    """A collision on one prim must not hide a target elsewhere that had no candidate."""
+    tool = _load_script("openusd-stage/scripts/fix_reference_path.py")
+    stage = tmp_path / "scene.usda"
+    stage.write_text(
+        '#usda 1.0\n(\n    defaultPrim = "World"\n)\n\n'
+        'def Xform "World"\n{\n'
+        '    def Xform "A" (\n        prepend references = [@./x/gone.usda@, @./y/gone.usda@]\n    )\n'
+        "    {\n    }\n"
+        '    def Xform "B" (\n        prepend references = @./nowhere.usda@\n    )\n'
+        "    {\n    }\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    library = tmp_path / "library"
+    library.mkdir()
+    (library / "gone.usda").write_text(ASSET_TEMPLATE, encoding="utf-8")
+
+    before = stage.read_text(encoding="utf-8")
+    result = tool.main(stage_file=str(stage), search_dirs=[str(library)], apply=True)
+
+    assert result["success"] is False
+    prims = [target["prim_path"] for target in result["context"]["targets"]]
+    assert "/World/B" in prims, "the target with no candidate must still be reported"
+    assert "/World/B" in [target["prim_path"] for target in result["context"]["unresolved"]]
+    assert stage.read_text(encoding="utf-8") == before, "a rejected collision must not write anything"
+
+
 # ── suggest_material_bind script ───────────────────────────────────────────
 
 

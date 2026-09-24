@@ -1026,7 +1026,8 @@ def fix_reference_path(
             for item in planned
             if item.get("status") != "unresolved"
         ]
-        return _fix_result(path, runtime, failed)
+        unresolved = [item for item in planned if item.get("status") == "unresolved"]
+        return _fix_result(path, runtime, failed, unresolved)
 
     resolved_targets: List[Dict[str, Any]] = []
     for item in planned:
@@ -1207,15 +1208,27 @@ def suggest_material_bind(
     return result
 
 
-def _fix_result(path: Path, runtime: str, targets: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """Build a :func:`fix_reference_path` result whose every target failed."""
+def _fix_result(
+    path: Path,
+    runtime: str,
+    failed: List[Dict[str, Any]],
+    unresolved: Optional[List[Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
+    """Build a :func:`fix_reference_path` result whose listed targets failed.
+
+    *unresolved* targets are reported alongside the failures rather than being
+    dropped: a collision on one prim says nothing about a target elsewhere that
+    simply had no candidate, and silently omitting it would hide work that
+    still needs doing.
+    """
+    kept_unresolved = list(unresolved or [])
     return {
         "stage_file": str(path),
         "runtime": runtime,
         "applied": False,
-        "targets": targets,
-        "unresolved": [],
-        "failed": list(targets),
+        "targets": list(failed) + kept_unresolved,
+        "unresolved": kept_unresolved,
+        "failed": list(failed),
         "verified": False,
     }
 

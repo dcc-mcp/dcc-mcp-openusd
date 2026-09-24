@@ -38,15 +38,35 @@ def main(**kwargs) -> dict:
             stage_file=stage_file,
             targets=targets,
             failed=failed,
+            unresolved=unresolved,
         )
+
+    if not targets:
+        # Nothing matched at all -- either the stage is clean or the filter
+        # missed. Both are true whether or not a write was requested, so this
+        # is checked before the apply branch: a second apply=true on an
+        # already-fixed stage must stay a success, and a filter that missed
+        # must still warn instead of being reported as a failed fix.
+        message = "No broken references found in {}".format(stage_file)
+        if requested_prim:
+            return skill_warning(
+                message,
+                warning="No broken reference matched prim_path '{}'".format(requested_prim),
+                prompt="Check the prim path, or drop prim_path to cover the whole stage.",
+                stage_file=stage_file,
+                targets=targets,
+                prim_path=requested_prim,
+            )
+        return skill_success(message, stage_file=stage_file, targets=targets)
 
     if requested_apply:
         # The caller asked for a write. Anything less than a complete, verified
         # fix is a failure: a warning here would let a caller that promised a
         # fix read the envelope as success.
         if unresolved or not applied:
+            summary = _summarize(unresolved or targets) or "no replacement could be applied"
             return skill_error(
-                "No reference was fixed in {} — {}".format(stage_file, _summarize(unresolved or targets)),
+                "No reference was fixed in {} — {}".format(stage_file, summary),
                 "reference_unresolved",
                 prompt="Pass asset_path or search_dirs so a replacement can be found for every broken reference.",
                 stage_file=stage_file,
@@ -77,21 +97,6 @@ def main(**kwargs) -> dict:
             targets=targets,
             unresolved=unresolved,
         )
-
-    if not targets:
-        message = "No broken references found in {}".format(stage_file)
-        if requested_prim:
-            # A filter that matched nothing is not a clean stage: say so, so
-            # the caller does not read this as "the stage is fine".
-            return skill_warning(
-                message,
-                warning="No broken reference matched prim_path '{}'".format(requested_prim),
-                prompt="Check the prim path, or drop prim_path to cover the whole stage.",
-                stage_file=stage_file,
-                targets=targets,
-                prim_path=requested_prim,
-            )
-        return skill_success(message, stage_file=stage_file, targets=targets)
 
     # Every target has a planned replacement. Reporting a postcondition here
     # would claim a write that never happened, so the envelope stays honest.

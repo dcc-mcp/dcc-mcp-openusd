@@ -74,5 +74,8 @@ Rewriting preserves comments in the layer.
 
 A dry run that leaves a reference unresolved returns success **with a
 `warning`**; the same situation under `apply=true` is an error, because the
-call promised a fix. The tool is idempotent: a second run finds nothing left to
-do.
+call promised a fix. The tool is idempotent: a second `apply=true` over an
+already-fixed stage is a success reporting "No broken references found", not
+an error, so a retry loop does not see a false alarm. A `prim_path` that
+matches no broken reference reports a `warning` naming the filter under both
+`apply=true` and a dry run, so it cannot be read as a clean stage.
