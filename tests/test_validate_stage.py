@@ -90,6 +90,17 @@ def issue_for(result, code: str):
     return matches[0]
 
 
+def prim_of(issue) -> str:
+    """Return the prim path an issue points at."""
+    assert issue["location"]["kind"] == "prim", issue["location"]
+    return issue["location"]["path"]
+
+
+def label_of(issue) -> str:
+    """Return the display label of an issue location (the legacy string form)."""
+    return issue["location"]["label"]
+
+
 # ── rule registry and issue shape ──────────────────────────────────────────
 
 
@@ -109,11 +120,20 @@ def test_issue_objects_keep_severity_and_message_and_add_code_and_location(runti
     assert result["issues"], "expected at least one issue for a metadata-less stage"
 
     for issue in result["issues"]:
-        assert set(issue) == {"code", "severity", "message", "location", "suggested_fix", "next_steps"}
+        assert set(issue) == {
+            "code",
+            "severity",
+            "message",
+            "location",
+            "strict_promoted",
+            "suggested_fix",
+            "next_steps",
+        }
         assert issue["code"] in VALIDATION_RULES
         assert issue["severity"] in {"error", "warning"}
         assert issue["message"]
-        assert issue["location"]
+        assert issue["location"]["kind"] in {"prim", "layer", "line"}
+        assert issue["strict_promoted"] is False
 
 
 def test_pxr_and_fallback_report_the_same_codes_on_every_fixture():
@@ -181,7 +201,7 @@ def test_broken_reference_is_reported(runtime_mode):
     assert result["valid"] is False
     issue = issue_for(result, "UNRESOLVED_REFERENCE")
     assert issue["severity"] == "error"
-    assert issue["location"] == "/World/SetDressing/MissingSetPiece"
+    assert prim_of(issue) == "/World/SetDressing/MissingSetPiece"
     assert "missing_set_piece.usda" in issue["message"]
 
 
@@ -219,7 +239,10 @@ def test_reference_cycle_is_reported(runtime_mode, tmp_path):
 
     result = validate_stage(str(stage_file))
     assert "REFERENCE_CYCLE" in codes(result)
-    assert issue_for(result, "REFERENCE_CYCLE")["location"] == "[cycle.usda]"
+    cycle = issue_for(result, "REFERENCE_CYCLE")
+    assert cycle["location"]["kind"] == "layer"
+    assert cycle["location"]["path"] == "cycle.usda"
+    assert label_of(cycle) == "[cycle.usda]"
 
 
 def test_detect_reference_cycle_returns_none_for_acyclic_stage(tmp_path):
@@ -237,7 +260,9 @@ def test_up_axis_mismatch_is_reported(runtime_mode):
 
     issue = issue_for(result, "UP_AXIS_MISMATCH")
     assert issue["severity"] == "error"
-    assert issue["location"] == "[unit_mismatch_sublayer.usda]"
+    assert issue["location"]["kind"] == "layer"
+    assert issue["location"]["path"] == "unit_mismatch_sublayer.usda"
+    assert label_of(issue) == "[unit_mismatch_sublayer.usda]"
     assert "Z" in issue["message"] and "Y" in issue["message"]
 
 
@@ -247,7 +272,8 @@ def test_meters_per_unit_mismatch_is_reported(runtime_mode):
 
     issue = issue_for(result, "METERS_PER_UNIT_MISMATCH")
     assert issue["severity"] == "error"
-    assert issue["location"] == "[unit_mismatch_sublayer.usda]"
+    assert issue["location"]["kind"] == "layer"
+    assert issue["location"]["path"] == "unit_mismatch_sublayer.usda"
     assert "0.01" in issue["message"]
 
 
@@ -312,10 +338,16 @@ def test_strict_promotes_missing_production_metadata(runtime_mode, tmp_path):
     relaxed = validate_stage(str(stage_file))
     assert issue_for(relaxed, "MISSING_UP_AXIS")["severity"] == "warning"
     assert issue_for(relaxed, "MISSING_METERS_PER_UNIT")["severity"] == "warning"
+    assert issue_for(relaxed, "MISSING_UP_AXIS")["strict_promoted"] is False
 
     strict = validate_stage(str(stage_file), strict=True)
     assert issue_for(strict, "MISSING_UP_AXIS")["severity"] == "error"
     assert issue_for(strict, "MISSING_METERS_PER_UNIT")["severity"] == "error"
+    # ``strict_promoted`` separates "an error on its own" from "an error only
+    # because the run was strict", so an agent can explain the difference.
+    assert issue_for(strict, "MISSING_UP_AXIS")["strict_promoted"] is True
+    assert issue_for(strict, "MISSING_METERS_PER_UNIT")["strict_promoted"] is True
+    assert issue_for(strict, "MISSING_DEFAULT_PRIM")["strict_promoted"] is False
     assert strict["valid"] is False
 
 
@@ -328,7 +360,7 @@ def test_dangling_material_binding_is_reported(runtime_mode):
 
     issue = issue_for(result, "DANGLING_MATERIAL_BINDING")
     assert issue["severity"] == "error"
-    assert issue["location"] == "/World/Prop"
+    assert prim_of(issue) == "/World/Prop"
     assert "MissingPropPaint" in issue["message"]
 
 
@@ -338,7 +370,7 @@ def test_material_without_shader_is_reported(runtime_mode):
 
     issue = issue_for(result, "INCOMPLETE_MATERIAL")
     assert issue["severity"] == "warning"
-    assert issue["location"] == "/World/Materials/PropPaint"
+    assert prim_of(issue) == "/World/Materials/PropPaint"
 
 
 def test_unbound_material_is_reported(runtime_mode):
@@ -347,7 +379,7 @@ def test_unbound_material_is_reported(runtime_mode):
 
     issue = issue_for(result, "UNBOUND_MATERIAL")
     assert issue["severity"] == "warning"
-    assert issue["location"] == "/World/Materials/PropPaint"
+    assert prim_of(issue) == "/World/Materials/PropPaint"
 
 
 def test_bound_and_shaded_material_is_clean(runtime_mode, tmp_path):
@@ -440,7 +472,7 @@ def test_default_prim_pointing_at_a_missing_prim_is_reported(runtime_mode, tmp_p
 
     issue = issue_for(validate_stage(str(stage_file)), "INVALID_DEFAULT_PRIM")
     assert issue["severity"] == "error"
-    assert issue["location"] == "/Nope"
+    assert prim_of(issue) == "/Nope"
 
 
 def test_untyped_nested_prim_is_reported(runtime_mode, tmp_path):
@@ -458,7 +490,7 @@ def test_untyped_nested_prim_is_reported(runtime_mode, tmp_path):
 
     issue = issue_for(validate_stage(str(stage_file)), "UNDEFINED_PRIM_TYPE")
     assert issue["severity"] == "warning"
-    assert issue["location"] == "/World/Holder"
+    assert prim_of(issue) == "/World/Holder"
 
 
 def test_empty_stage_reports_no_traversable_prims(runtime_mode, tmp_path):
@@ -467,7 +499,7 @@ def test_empty_stage_reports_no_traversable_prims(runtime_mode, tmp_path):
 
     issue = issue_for(validate_stage(str(stage_file)), "NO_TRAVERSABLE_PRIMS")
     assert issue["severity"] == "warning"
-    assert issue["location"] == "/"
+    assert prim_of(issue) == "/"
 
 
 def test_non_usda_text_reports_invalid_header(runtime_mode, tmp_path):
@@ -476,7 +508,10 @@ def test_non_usda_text_reports_invalid_header(runtime_mode, tmp_path):
 
     issue = issue_for(validate_stage(str(stage_file)), "INVALID_STAGE_HEADER")
     assert issue["severity"] == "error"
-    assert issue["location"] == "[line 1]"
+    assert issue["location"]["kind"] == "line"
+    assert issue["location"]["line"] == 1
+    assert issue["location"]["path"] is None
+    assert label_of(issue) == "[line 1]"
 
 
 def test_comments_are_ignored_when_parsing_metadata(runtime_mode, tmp_path):
@@ -531,7 +566,7 @@ def test_prim_header_dictionary_does_not_swallow_the_body(runtime_mode):
     result = validate_stage(str(CUSTOM_DATA_PRIM))
 
     issue = issue_for(result, "UNRESOLVED_REFERENCE")
-    assert issue["location"] == "/World/Body"
+    assert prim_of(issue) == "/World/Body"
     # The prim header dictionary also carries the binding, which must be seen.
     assert "DANGLING_MATERIAL_BINDING" not in codes(result)
 
@@ -546,7 +581,8 @@ def test_sublayer_offset_does_not_truncate_layer_metadata(runtime_mode):
 
     assert "MISSING_UP_AXIS" not in codes(result)
     assert "MISSING_METERS_PER_UNIT" not in codes(result)
-    assert issue_for(result, "UP_AXIS_MISMATCH")["location"] == "[sublayer_offset_sub.usda]"
+    assert label_of(issue_for(result, "UP_AXIS_MISMATCH")) == "[sublayer_offset_sub.usda]"
+    assert issue_for(result, "UP_AXIS_MISMATCH")["location"]["kind"] == "layer"
     assert issue_for(result, "METERS_PER_UNIT_MISMATCH")["severity"] == "error"
 
 
@@ -634,7 +670,7 @@ def test_sublayers_differing_only_by_case_are_both_checked(runtime_mode, tmp_pat
     )
 
     result = validate_stage(str(root))
-    locations = {issue["location"] for issue in result["issues"] if issue["code"] == "UP_AXIS_MISMATCH"}
+    locations = {label_of(issue) for issue in result["issues"] if issue["code"] == "UP_AXIS_MISMATCH"}
     assert locations == {"[Set.usda]", "[set.usda]"}
 
 
@@ -666,7 +702,7 @@ def test_multiple_variants_flatten_to_the_same_level(runtime_mode):
     assert "DANGLING_MATERIAL_BINDING" not in codes(result)
     assert result["valid"] is True
     # Both materials are reported at the flat path they compose to.
-    unbound = {issue["location"] for issue in result["issues"] if issue["code"] == "UNBOUND_MATERIAL"}
+    unbound = {prim_of(issue) for issue in result["issues"] if issue["code"] == "UNBOUND_MATERIAL"}
     assert unbound == {"/Root/Looks/RedMat"}
 
 
@@ -778,9 +814,9 @@ def test_multiline_sublayers_are_all_parsed(runtime_mode):
     """
     result = validate_stage(str(MULTILINE_SUBLAYERS))
 
-    mismatches = {issue["location"] for issue in result["issues"] if issue["code"] == "UP_AXIS_MISMATCH"}
+    mismatches = {label_of(issue) for issue in result["issues"] if issue["code"] == "UP_AXIS_MISMATCH"}
     assert mismatches == {"[sub_a.usda]", "[sub_b.usda]"}
-    units = {issue["location"] for issue in result["issues"] if issue["code"] == "METERS_PER_UNIT_MISMATCH"}
+    units = {label_of(issue) for issue in result["issues"] if issue["code"] == "METERS_PER_UNIT_MISMATCH"}
     assert units == {"[sub_a.usda]", "[sub_b.usda]"}
     assert result["valid"] is False
 

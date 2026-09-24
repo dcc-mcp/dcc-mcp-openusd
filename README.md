@@ -118,9 +118,22 @@ when pxr is absent.
 `pxr` is used only to parse the file (`Sdf.Layer`); both runtimes report facts for
 the **root layer only** — prims composed in from references and sublayers are out
 of scope — so the two collectors stay equivalent and reference asset paths are
-always resolved against the root layer's directory. Each issue is
-`{code, severity, message, location, suggested_fix, next_steps}`; the registry is
+always resolved against the root layer's directory. The registry is
 `dcc_mcp_openusd.runtime.VALIDATION_RULES`.
+
+The result is a `ValidationResult`
+(`{success, message, stage_file, issues, summary, next_steps}`): `summary` counts
+issues per severity, and `next_steps` aggregates every issue's steps so an agent
+can act without walking `issues`. Each issue is a `ValidationIssue`
+(`{code, severity, message, location, strict_promoted, suggested_fix, next_steps}`)
+whose `location` is a discriminated object —
+`{"kind": "prim"|"layer"|"line", "path": …, "line": …, "label": …}` — so callers
+tell a prim path from a layer or a line number by reading `kind` instead of
+re-parsing brackets. `strict_promoted` marks issues that only became errors
+because the run was strict. See
+`dcc_mcp_openusd.validation` for the schema and
+[`openusd-validate/SKILL.md`](src/dcc_mcp_openusd/skills/openusd-validate/SKILL.md)
+for the agent-facing contract.
 
 Issues point at the skill that can fix them: `UNRESOLVED_REFERENCE` suggests
 `openusd_stage__fix_reference_path`, and `UNBOUND_MATERIAL` /
