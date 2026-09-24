@@ -34,6 +34,27 @@ ASSET_TEMPLATE = (
 )
 
 
+# ── a stage that cannot be inspected is never reported as clean ─────────────
+
+#: A .usdc-style binary layer. The collector keys off this magic, so the file
+#: needs no real payload to exercise the "cannot be inspected" path.
+BINARY_MAGIC = b"PXR-USDC"
+
+
+def _binary_stage(tmp_path, name="scene.usdc") -> Path:
+    """A binary USD layer that only pxr could read."""
+    target = tmp_path / name
+    target.write_bytes(BINARY_MAGIC + bytes(64))
+    return target
+
+
+def _headerless_stage(tmp_path, name="scene.usda") -> Path:
+    """A text file that is not a USD layer at all."""
+    target = tmp_path / name
+    target.write_text('def Xform "World"\n{\n}\n', encoding="utf-8")
+    return target
+
+
 @pytest.fixture(params=["pxr", "text-fallback"])
 def runtime_mode(request, monkeypatch):
     """Run the test once per runtime by forcing the detected runtime."""
@@ -388,3 +409,36 @@ def test_commented_out_reference_is_not_rewritten(runtime_mode, tmp_path, librar
 
     assert _statuses(result) == {"/World/Piece": "fixed"}
     assert "# prepend references = @./assets/missing_set_piece.usda@" in text
+
+
+def test_binary_layer_without_pxr_is_not_reported_clean(tmp_path, monkeypatch):
+    """A binary layer the collector cannot read must not look like a clean stage."""
+    monkeypatch.setattr("dcc_mcp_openusd.runtime._RUNTIME_INFO", RuntimeInfo(has_pxr=False))
+    stage = _binary_stage(tmp_path)
+
+    result = fix_reference_path(str(stage))
+
+    assert result["applied"] is False
+    assert result["failed"], "an unreadable layer is neither clean nor fixed"
+    assert "binary" in result["failed"][0]["detail"]
+
+
+def test_binary_layer_is_still_rejected_when_apply_is_requested(tmp_path, monkeypatch):
+    """The same refusal holds for apply=true, not just a dry run."""
+    monkeypatch.setattr("dcc_mcp_openusd.runtime._RUNTIME_INFO", RuntimeInfo(has_pxr=False))
+    stage = _binary_stage(tmp_path)
+
+    result = fix_reference_path(str(stage), apply=True)
+
+    assert result["applied"] is False
+    assert result["failed"]
+
+
+def test_a_file_that_is_not_a_usd_layer_is_not_reported_clean(runtime_mode, tmp_path):
+    """A text file with no #usda header yields no facts; that is not a clean stage."""
+    stage = _headerless_stage(tmp_path)
+
+    result = fix_reference_path(str(stage))
+
+    assert result["applied"] is False
+    assert result["failed"], "an unparseable file must not be reported as having no broken references"

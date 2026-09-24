@@ -56,6 +56,12 @@ Defaults to reporting: `apply` is `false`, so nothing is written. When a stage
 offers no candidate at all, the tool returns success **with a `warning`** and
 lists the issue under `context.unresolved` — never an empty success.
 
+An empty suggestion list is only a healthy stage when the stage could actually
+be read. A binary layer without `pxr`, a layer that failed to open, or a file
+that is not a USD layer fail with `material_bind_failed` instead of reporting
+"No material binding suggestions", so the tool never asserts a file it could
+not inspect is clean.
+
 ```text
 suggest_material_bind(stage_file)
   -> suggestions[]

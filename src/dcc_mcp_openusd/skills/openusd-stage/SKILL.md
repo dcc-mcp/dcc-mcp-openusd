@@ -79,3 +79,9 @@ already-fixed stage is a success reporting "No broken references found", not
 an error, so a retry loop does not see a false alarm. A `prim_path` that
 matches no broken reference reports a `warning` naming the filter under both
 `apply=true` and a dry run, so it cannot be read as a clean stage.
+
+"No broken references found" is only reported for a stage that was actually
+inspected. A binary layer without `pxr`, a layer that failed to open, or a file
+that is not a USD layer all produce empty facts, which would otherwise be
+indistinguishable from a healthy stage — those cases fail with `status=
+"failed"` instead, so the tool never asserts a file it could not read is clean.

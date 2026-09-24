@@ -338,3 +338,32 @@ def test_suggest_material_bind_reports_a_clean_stage(tmp_path):
     assert result["success"] is True
     assert result["context"]["suggestions"] == []
     assert result["context"].get("warning", "") == ""
+
+
+# ── envelope level: an unreadable stage must never look clean ──────────────
+
+
+def test_fix_reference_path_fails_on_a_binary_stage(tmp_path):
+    """The script turns an unreadable layer into an error, not a clean success."""
+    tool = _load_script("openusd-stage/scripts/fix_reference_path.py")
+    stage = tmp_path / "scene.usdc"
+    stage.write_bytes(b"PXR-USDC" + bytes(64))
+
+    result = tool.main(stage_file=str(stage))
+
+    assert result["success"] is False
+    assert result["error"] == "reference_fix_failed"
+    assert "binary" in result["context"]["failed"][0]["detail"]
+
+
+def test_suggest_material_bind_fails_on_a_binary_stage(tmp_path):
+    """The material skill makes the same refusal."""
+    tool = _load_script("openusd-material/scripts/suggest_material_bind.py")
+    stage = tmp_path / "scene.usdc"
+    stage.write_bytes(b"PXR-USDC" + bytes(64))
+
+    result = tool.main(stage_file=str(stage))
+
+    assert result["success"] is False
+    assert result["error"] == "material_bind_failed"
+    assert "binary" in result["context"]["failed"][0]["detail"]

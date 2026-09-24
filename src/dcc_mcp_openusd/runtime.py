@@ -926,6 +926,37 @@ def find_unresolved_references(stage_file: str, prim_path: Optional[str] = None)
     }
 
 
+def _uninspectable_detail(facts: _StageFacts) -> Optional[str]:
+    """Return why *facts* could not be inspected, or ``None`` when they could.
+
+    The three conditions mirror the layer-integrity rules
+    :func:`validate_stage` already reports, so a fix skill can never call a
+    stage clean that the validator calls an error. Without this, a stage the
+    collectors could not read yields empty facts, which reads exactly like a
+    stage with nothing wrong with it.
+    """
+    if facts.open_error:
+        return "Stage could not be opened: %s" % facts.open_error
+    if facts.binary_layer and not detect_runtime().has_pxr:
+        return "Layer is binary; inspecting it requires the pxr runtime"
+    if not facts.binary_layer and not facts.header_ok:
+        return "Layer is not a text USD layer; it does not start with a #usda header"
+    return None
+
+
+def _blocked_failure(prim_path: Optional[str], detail: str) -> List[Dict[str, Any]]:
+    """Build the failed-target list for a stage that could not be inspected."""
+    return [
+        {
+            "prim_path": prim_path or "",
+            "asset_path": "",
+            "status": "failed",
+            "detail": detail,
+            "candidates": [],
+        }
+    ]
+
+
 def fix_reference_path(
     stage_file: str,
     prim_path: Optional[str] = None,
@@ -947,6 +978,12 @@ def fix_reference_path(
     """
     path = _existing_file(stage_file)
     facts, runtime = _collect_stage_facts(path)
+
+    # An unreadable stage must not look like a clean one: empty facts are
+    # indistinguishable from a stage with nothing wrong with it.
+    uninspectable = _uninspectable_detail(facts)
+    if uninspectable:
+        return _fix_result(path, runtime, _blocked_failure(prim_path, uninspectable))
 
     targets = _unresolved_reference_targets(facts, prim_path)
     explicit = _resolve_replacement_asset(path.parent, asset_path) if asset_path else None
@@ -1078,6 +1115,28 @@ def suggest_material_bind(
 
     wanted_prim = _normalize_prim_path(prim_path) if prim_path else None
     wanted_material = _normalize_prim_path(material_path) if material_path else None
+
+    # Same rule as fix_reference_path: no suggestions is only a clean stage if
+    # the stage could actually be read.
+    uninspectable = _uninspectable_detail(facts)
+    if uninspectable:
+        return {
+            "stage_file": str(path),
+            "runtime": runtime,
+            "applied": False,
+            "suggestions": [],
+            "unresolved": [],
+            "failed": [
+                {
+                    "prim_path": wanted_prim or "",
+                    "material_path": wanted_material or "",
+                    "status": "failed",
+                    "detail": uninspectable,
+                    "candidates": [],
+                }
+            ],
+            "verified": False,
+        }
 
     materials = sorted(facts.materials)
     bound_targets = {target for _, target in facts.bindings}
