@@ -39,11 +39,39 @@ than only the selected one. That way a binding pointing into a variant never
 looks dangling. A Material counts as complete when it has an `outputs:surface`
 authoring or a Shader at any depth beneath it.
 
-Each issue is `{code, severity, message, location}`. `location` is either a
-prim path (`/World/Prop`) or a `[...]` layer marker (`[unit_mismatch_sublayer.usda]`,
-`[line 1]`). `severity` is `error` or `warning`; only errors make the stage
-invalid. `strict: true` promotes the *missing production metadata* warnings to
-errors.
+Each issue is `{code, severity, message, location, suggested_fix, next_steps}`.
+`location` is either a prim path (`/World/Prop`) or a `[...]` layer marker
+(`[unit_mismatch_sublayer.usda]`, `[line 1]`). `severity` is `error` or
+`warning`; only errors make the stage invalid. `strict: true` promotes the
+*missing production metadata* warnings to errors.
+
+### `suggested_fix` and `next_steps`
+
+`suggested_fix` is the machine-readable fix for the issue, or `null` when no
+fix skill covers the rule. Its shape is minimal on purpose —
+`{"skill": "<family>__<tool>", "args": {...}}` — because the final
+`ValidationIssue` schema is owned elsewhere and will replace it in one pass:
+
+```json
+{
+  "skill": "openusd_stage__fix_reference_path",
+  "args": {"stage_file": "/work/scene.usda", "prim_path": "/World/Prop"}
+}
+```
+
+`next_steps` is a list that is never empty, so an agent always has a next move.
+For a rule with a fix skill the single entry is that skill plus its `args`; for
+every other rule it is `{action: "manual_fix", detail: "..."}` with the same
+advice a human would give.
+
+| code | `suggested_fix.skill` |
+| --- | --- |
+| `UNRESOLVED_REFERENCE` | `openusd_stage__fix_reference_path` |
+| `DANGLING_MATERIAL_BINDING` | `openusd_material__suggest_material_bind` |
+| `UNBOUND_MATERIAL` | `openusd_material__suggest_material_bind` |
+
+Both fix skills work without pxr for reporting and read back what they write,
+so the loop `validate -> suggested_fix -> validate` is safe to automate.
 
 | code | default severity | check |
 | --- | --- | --- |
@@ -73,10 +101,11 @@ The full registry is `dcc_mcp_openusd.runtime.VALIDATION_RULES`.
 ```text
 validate_stage(stage_file, strict=False)
   -> valid: false, issues[].code
-     |-- UNRESOLVED_REFERENCE     -> fix the asset path
-     |-- UP_AXIS_MISMATCH         -> align the sublayer with the root layer
-     |-- METERS_PER_UNIT_MISMATCH -> align the sublayer with the root layer
-     `-- DANGLING_MATERIAL_BINDING -> rebind or author the material
+     |-- UNRESOLVED_REFERENCE      -> openusd_stage__fix_reference_path
+     |-- DANGLING_MATERIAL_BINDING -> openusd_material__suggest_material_bind
+     |-- UNBOUND_MATERIAL          -> openusd_material__suggest_material_bind
+     |-- UP_AXIS_MISMATCH          -> align the sublayer with the root layer
+     `-- METERS_PER_UNIT_MISMATCH  -> align the sublayer with the root layer
 ```
 
 Sample stages covering the three high-frequency errors live in

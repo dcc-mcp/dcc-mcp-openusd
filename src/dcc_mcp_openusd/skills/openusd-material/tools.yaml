@@ -127,3 +127,52 @@ tools:
     next-tools:
       on-success:
         - openusd_stage__list_stage
+
+  - name: suggest_material_bind
+    description: >-
+      Suggest material bindings for prims whose material:binding is dangling
+      and for materials that are defined but never bound. Candidates come only
+      from prims that already exist in the stage; apply=true writes the binding
+      and needs the pxr runtime.
+    input_schema:
+      type: object
+      required: [stage_file]
+      properties:
+        stage_file:
+          type: string
+          description: Stage file to inspect.
+        prim_path:
+          type: string
+          description: Restrict suggestions to this prim, or the prim to bind when apply is true.
+        material_path:
+          type: string
+          description: Material to suggest, or the material to bind when apply is true.
+        apply:
+          type: boolean
+          default: false
+          description: >-
+            Write the binding through bind_material. Requires prim_path and
+            material_path and the pxr runtime.
+    read_only: false
+    destructive: false
+    idempotent: true
+    execution: sync
+    affinity: any
+    enforce_thread_affinity: true
+    timeout_hint_secs: 30
+    side_effects:
+      - binds a material to the target prim when apply is true
+    produces:
+      - material_binding
+      - binding_suggestions
+    risk: low
+    source_file: scripts/suggest_material_bind.py
+    annotations:
+      read_only_hint: false
+      destructive_hint: false
+      idempotent_hint: true
+      open_world_hint: false
+    next-tools:
+      on-success:
+        - openusd_validate__validate_stage
+        - openusd_stage__list_stage
