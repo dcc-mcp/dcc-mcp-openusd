@@ -33,6 +33,12 @@ equivalent and means reference asset paths always resolve against the root
 layer's directory. Layer-level metadata (`upAxis`, `metersPerUnit`) is still
 compared across the whole `subLayers` chain.
 
+Prims authored inside a `variantSet` block **are** reported, at the flat path
+they compose to (`/Root/Looks/RedMat`), and every variant is reported rather
+than only the selected one. That way a binding pointing into a variant never
+looks dangling. A Material counts as complete when it has an `outputs:surface`
+authoring or a Shader at any depth beneath it.
+
 Each issue is `{code, severity, message, location}`. `location` is either a
 prim path (`/World/Prop`) or a `[...]` layer marker (`[unit_mismatch_sublayer.usda]`,
 `[line 1]`). `severity` is `error` or `warning`; only errors make the stage

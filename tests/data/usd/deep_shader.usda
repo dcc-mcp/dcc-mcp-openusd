@@ -1,0 +1,26 @@
+#usda 1.0
+(
+    defaultPrim = "World"
+    metersPerUnit = 1
+    upAxis = "Y"
+)
+
+def Xform "World"
+{
+    def Material "DeepMat"
+    {
+        def NodeGraph "Network"
+        {
+            def Shader "Shader"
+            {
+                uniform token info:id = "UsdPreviewSurface"
+                token outputs:surface
+            }
+        }
+    }
+
+    def Mesh "Cube"
+    {
+        rel material:binding = </World/DeepMat>
+    }
+}

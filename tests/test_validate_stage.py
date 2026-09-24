@@ -31,21 +31,27 @@ DATA_DIR = Path(__file__).parent / "data" / "usd"
 
 BROKEN_REFERENCE = DATA_DIR / "broken_reference.usda"
 CUSTOM_DATA_PRIM = DATA_DIR / "custom_data_prim.usda"
+DEEP_SHADER = DATA_DIR / "deep_shader.usda"
+MULTILINE_SUBLAYERS = DATA_DIR / "multiline_sublayers.usda"
 NESTED_REFERENCE = DATA_DIR / "nested_reference.usda"
 PURPOSE_BINDING = DATA_DIR / "purpose_binding.usda"
 SUBLAYER_OFFSET = DATA_DIR / "sublayer_offset.usda"
 UNIT_MISMATCH = DATA_DIR / "unit_mismatch.usda"
 UNBOUND_MATERIAL = DATA_DIR / "unbound_material.usda"
+VARIANT_MATERIAL = DATA_DIR / "variant_material.usda"
 
 #: Every sample stage the parity test compares across runtimes.
 SAMPLES = (
     BROKEN_REFERENCE,
     CUSTOM_DATA_PRIM,
+    DEEP_SHADER,
+    MULTILINE_SUBLAYERS,
     NESTED_REFERENCE,
     PURPOSE_BINDING,
     SUBLAYER_OFFSET,
     UNIT_MISMATCH,
     UNBOUND_MATERIAL,
+    VARIANT_MATERIAL,
 )
 
 
@@ -586,27 +592,102 @@ def test_binding_name_filter_is_shared_by_both_collectors():
     assert not _is_material_binding_name("material:displacement")
 
 
-def test_layer_key_respects_case_sensitive_filesystems(tmp_path):
-    """Distinct files that differ only by case must not be merged.
+def _layer(up_axis: str) -> str:
+    """Return a minimal USDA layer declaring only *up_axis*."""
+    return f'#usda 1.0\n(\n    upAxis = "{up_axis}"\n)\n\ndef Xform "Props"\n{{\n}}\n'
 
-    ``_layer_key`` used to lowercase unconditionally, which merged ``Set.usda``
-    and ``set.usda`` into one node and reported a false REFERENCE_CYCLE.
+
+def test_sublayers_differing_only_by_case_are_both_checked(runtime_mode, tmp_path):
+    """Distinct sublayer files that differ only by case must both be checked.
+
+    ``_layer_key`` used to lowercase unconditionally, which collapsed
+    ``Set.usda`` and ``set.usda`` into one node in the layer chain and dropped
+    one of the two mismatch reports. Both files are really created here and the
+    assertion would fail if the keys were merged, so the test can fail.
     """
+    import os
+
     from dcc_mcp_openusd.runtime import _layer_key
 
     upper = tmp_path / "Set.usda"
     lower = tmp_path / "set.usda"
-    if _layer_key(upper) == _layer_key(lower):
-        pytest.skip("this filesystem is case-insensitive")  # noqa: B028
+    if os.path.normcase(upper.name) == os.path.normcase(lower.name):
+        pytest.skip("case-insensitive filesystem: the two names are one file")  # noqa: B028
+
+    upper.write_text(_layer("Z"), encoding="utf-8")
+    lower.write_text(_layer("X"), encoding="utf-8")
+    assert _layer_key(upper) != _layer_key(lower)
 
     root = tmp_path / "scene.usda"
     root.write_text(
-        '#usda 1.0\n(\n    defaultPrim = "World"\n    metersPerUnit = 1\n    upAxis = "Y"\n)\n\n'
+        '#usda 1.0\n(\n    defaultPrim = "World"\n    metersPerUnit = 1\n'
+        "    subLayers = [@./Set.usda@, @./set.usda@]\n"
+        '    upAxis = "Y"\n)\n\n'
         'def Xform "World"\n{\n}\n',
         encoding="utf-8",
     )
+
     result = validate_stage(str(root))
-    assert "REFERENCE_CYCLE" not in codes(result)
+    locations = {issue["location"] for issue in result["issues"] if issue["code"] == "UP_AXIS_MISMATCH"}
+    assert locations == {"[Set.usda]", "[set.usda]"}
+
+
+def test_material_defined_in_a_variant_block_is_visible(runtime_mode):
+    """A Material authored inside a variantSet must resolve in both runtimes.
+
+    The pxr walk only followed ``nameChildren``, so variant content was
+    invisible to it and the binding looked dangling — an error that flipped
+    ``valid`` to False. Both collectors now report variant prims at the flat
+    path they compose to.
+    """
+    result = validate_stage(str(VARIANT_MATERIAL))
+
+    assert "DANGLING_MATERIAL_BINDING" not in codes(result)
+    assert result["valid"] is True
+
+
+def test_shader_nested_deeper_than_a_direct_child_counts(runtime_mode):
+    """A Shader several levels below its Material counts as its surface.
+
+    The pxr collector only collected direct children while the text collector
+    matched on path prefix at any depth, so a Shader inside a NodeGraph was a
+    spurious INCOMPLETE_MATERIAL under pxr alone.
+    """
+    result = validate_stage(str(DEEP_SHADER))
+
+    assert "INCOMPLETE_MATERIAL" not in codes(result)
+    assert "UNBOUND_MATERIAL" not in codes(result)
+    assert result["valid"] is True
+
+
+def test_multiline_sublayers_are_all_parsed(runtime_mode):
+    """A subLayers list written across several lines must not collapse.
+
+    The regex stopped at the end of the line, so a multi-line list yielded no
+    sublayers at all and both unit-consistency checks were silently skipped —
+    a false negative against acceptance criterion 3.
+    """
+    result = validate_stage(str(MULTILINE_SUBLAYERS))
+
+    mismatches = {issue["location"] for issue in result["issues"] if issue["code"] == "UP_AXIS_MISMATCH"}
+    assert mismatches == {"[sub_a.usda]", "[sub_b.usda]"}
+    units = {issue["location"] for issue in result["issues"] if issue["code"] == "METERS_PER_UNIT_MISMATCH"}
+    assert units == {"[sub_a.usda]", "[sub_b.usda]"}
+    assert result["valid"] is False
+
+
+def test_sublayer_assets_parse_across_line_breaks():
+    """The subLayers parser handles multi-line, single-line and bare forms."""
+    from dcc_mcp_openusd.runtime import _find_sublayer_assets
+
+    assert _find_sublayer_assets("subLayers = [\n    @./a.usda@,\n    @./b.usda@\n]") == [
+        "./a.usda",
+        "./b.usda",
+    ]
+    assert _find_sublayer_assets("subLayers = [@./a.usda@, @./b.usda@]") == ["./a.usda", "./b.usda"]
+    assert _find_sublayer_assets("subLayers = [@./a.usda@ (offset = 10; scale = 1)]") == ["./a.usda"]
+    assert _find_sublayer_assets("subLayers = @./a.usda@") == ["./a.usda"]
+    assert _find_sublayer_assets("metersPerUnit = 1") == []
 
 
 def test_referenced_prims_are_out_of_scope_for_both_collectors(runtime_mode, tmp_path):

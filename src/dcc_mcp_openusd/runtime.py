@@ -515,8 +515,7 @@ def _collect_facts_pxr(path: Path, chain: List[Dict[str, Any]]) -> _StageFacts:
     if layer is None:
         raise OpenUsdError(f"Could not open stage: {path}")
 
-    for spec, descendants in _walk_layer_prim_specs(layer):
-        prim_path = str(spec.path)
+    for spec, prim_path, descendants in _walk_layer_prim_specs(layer):
         prim_type = spec.typeName or ""
         facts.prim_types[prim_path] = prim_type
         if spec.specifier == Sdf.SpecifierDef and not prim_type:
@@ -539,27 +538,46 @@ def _collect_facts_pxr(path: Path, chain: List[Dict[str, Any]]) -> _StageFacts:
     return facts
 
 
-def _walk_layer_prim_specs(layer: Any) -> List[Tuple[Any, List[Any]]]:
-    """Return ``(spec, all_descendant_specs)`` for every prim spec in a layer.
+def _walk_layer_prim_specs(layer: Any) -> List[Tuple[Any, str, List[Any]]]:
+    """Return ``(spec, flat_path, all_descendant_specs)`` for every prim spec.
 
     Pre-order depth first, so the ordering matches a textual scan of the file.
+
+    Variant content is walked too, at the flat path it composes to: a Material
+    authored inside ``variantSet "shading"`` under ``/Root/Looks`` is reported
+    as ``/Root/Looks/RedMat``, which is both what the text collector's flat
+    regex produces and what USD composes once the variant is selected. All
+    variants are reported, not just the selected one, so a binding never looks
+    dangling merely because it points into an unselected variant.
     """
-    ordered: List[Tuple[Any, List[Any]]] = []
-    stack: List[Tuple[Any, bool]] = [(spec, False) for spec in reversed(list(layer.rootPrims))]
-    ancestors: List[Any] = []
-    while stack:
-        spec, is_exit = stack.pop()
-        if is_exit:
-            ancestors.pop()
-            continue
+    ordered: List[Tuple[Any, str, List[Any]]] = []
+
+    def child_specs(spec: Any) -> List[Any]:
+        """Name children plus the prim specs of every variant of every set."""
+        children = list(spec.nameChildren)
+        try:
+            variant_sets = spec.variantSets
+        except Exception:
+            return children
+        for set_name in variant_sets.keys():
+            variant_set = variant_sets[set_name]
+            for variant_name in variant_set.variants.keys():
+                variant_prim = variant_set.variants[variant_name].primSpec
+                if variant_prim is not None:
+                    children.extend(variant_prim.nameChildren)
+        return children
+
+    def visit(spec: Any, path: str) -> List[Any]:
+        """Record *spec* pre-order and return every descendant spec, full depth."""
         descendants: List[Any] = []
-        for child in spec.nameChildren:
+        ordered.append((spec, path, descendants))
+        for child in child_specs(spec):
             descendants.append(child)
-        ordered.append((spec, list(descendants)))
-        ancestors.append(spec)
-        stack.append((spec, True))
-        for child in reversed(list(spec.nameChildren)):
-            stack.append((child, False))
+            descendants.extend(visit(child, path + "/" + child.name))
+        return descendants
+
+    for root in layer.rootPrims:
+        visit(root, "/" + root.name)
     return ordered
 
 
@@ -953,7 +971,7 @@ _USDA_PRIM_RE = re.compile(r'\b(def|over|class)\s+(?:([A-Za-z_][A-Za-z0-9_:]*)\s
 _ASSET_PATH_RE = re.compile(r"@([^@]*)@")
 _REFERENCE_RE = re.compile(r"\b(?:(?:prepend|append|add)\s+)?(?:references|payload)\s*=")
 _BINDING_RE = re.compile(r"\bmaterial:binding(?::[A-Za-z0-9_:]+)?\s*=\s*([^\n]*)")
-_SUBLAYER_RE = re.compile(r"\bsubLayers\s*=\s*([^\n]*)")
+_SUBLAYER_RE = re.compile(r"\bsubLayers\s*=")
 _BINARY_MAGIC = b"PXR-USDC"
 
 
@@ -1179,10 +1197,36 @@ def _parse_usda_metadata(text: str) -> Dict[str, Any]:
             info["meters_per_unit"] = float(match.group(1))
         except ValueError:
             info["meters_per_unit"] = match.group(1)
-    match = _SUBLAYER_RE.search(block)
-    if match:
-        info["sublayers"] = [asset for asset in _ASSET_PATH_RE.findall(match.group(1)) if asset]
+    info["sublayers"] = _find_sublayer_assets(block)
     return info
+
+
+def _find_sublayer_assets(block: str) -> List[str]:
+    """Return every asset path in a ``subLayers`` statement.
+
+    The list is matched across newlines so the common multi-line form is not
+    silently reduced to an empty chain:
+
+    .. code-block:: text
+
+        subLayers = [
+            @./sub_a.usda@,
+            @./sub_b.usda@
+        ]
+    """
+    match = _SUBLAYER_RE.search(block)
+    if not match:
+        return []
+    index = match.end()
+    while index < len(block) and block[index] in " \t":
+        index += 1
+    if index < len(block) and block[index] == "[":
+        close = _matching_delimiter(block, index, "[", "]")
+        segment = block[index:] if close == -1 else block[index : close + 1]
+    else:
+        newline = block.find("\n", index)
+        segment = block[index:] if newline == -1 else block[index:newline]
+    return [asset for asset in _ASSET_PATH_RE.findall(segment) if asset]
 
 
 def _read_layer_metadata(path: Path) -> Dict[str, Any]:
