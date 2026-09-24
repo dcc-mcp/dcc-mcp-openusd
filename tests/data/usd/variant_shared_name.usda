@@ -1,0 +1,37 @@
+#usda 1.0
+(
+    defaultPrim = "Root"
+    metersPerUnit = 1
+    upAxis = "Y"
+)
+
+def Xform "Root"
+{
+    def Scope "Looks"
+    {
+        variantSet "shading" = {
+            "red" {
+                def Material "Mat"
+                {
+                    token outputs:surface.connect = </Root/Looks/Mat/Shader.outputs:surface>
+
+                    def Shader "Shader"
+                    {
+                        uniform token info:id = "UsdPreviewSurface"
+                        token outputs:surface
+                    }
+                }
+            }
+            "blue" {
+                def Material "Mat"
+                {
+                }
+            }
+        }
+    }
+
+    def Mesh "Cube"
+    {
+        rel material:binding = </Root/Looks/Mat>
+    }
+}

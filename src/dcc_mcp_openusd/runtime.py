@@ -517,13 +517,14 @@ def _collect_facts_pxr(path: Path, chain: List[Dict[str, Any]]) -> _StageFacts:
 
     for spec, prim_path, descendants in _walk_layer_prim_specs(layer):
         prim_type = spec.typeName or ""
-        facts.prim_types[prim_path] = prim_type
+        # Several specs can collapse onto one path (the same prim name authored
+        # in two variants), so merge rather than overwrite.
+        facts.prim_types[prim_path] = _merge_prim_type(facts.prim_types.get(prim_path), prim_type)
         if spec.specifier == Sdf.SpecifierDef and not prim_type:
             facts.untyped_prims.add(prim_path)
         if prim_type == "Material":
-            facts.materials[prim_path] = "outputs:surface" in spec.properties or any(
-                child.typeName == "Shader" for child in descendants
-            )
+            complete = "outputs:surface" in spec.properties or any(child.typeName == "Shader" for child in descendants)
+            facts.materials[prim_path] = facts.materials.get(prim_path, False) or complete
         for asset in _spec_composition_assets(spec):
             facts.references.append((prim_path, asset))
         for name, property_spec in spec.properties.items():
@@ -536,6 +537,18 @@ def _collect_facts_pxr(path: Path, chain: List[Dict[str, Any]]) -> _StageFacts:
                 facts.bindings.append((prim_path, _strip_property_suffix(str(target))))
 
     return facts
+
+
+def _merge_prim_type(existing: Optional[str], new: str) -> str:
+    """Fold a prim type into one already recorded for the same path.
+
+    A prim name authored in several variants collapses onto a single flat path,
+    so the value kept is the first non-empty type name rather than the last one
+    seen, which would otherwise discard a real type in favour of an empty one.
+    """
+    if existing is None or (not existing and new):
+        return new
+    return existing
 
 
 def _walk_layer_prim_specs(layer: Any) -> List[Tuple[Any, str, List[Any]]]:
@@ -615,12 +628,15 @@ def _collect_facts_text(path: Path, chain: List[Dict[str, Any]]) -> _StageFacts:
     blocks = _parse_usda_blocks(text)
     for block in blocks:
         prim_path = block["path"]
-        facts.prim_types[prim_path] = block["type"]
+        # Same merge as the pxr collector: a name authored in several variants
+        # collapses onto one flat path.
+        facts.prim_types[prim_path] = _merge_prim_type(facts.prim_types.get(prim_path), block["type"])
         if block["specifier"] == "def" and not block["type"]:
             facts.untyped_prims.add(prim_path)
         own_text = block["own_text"]
         if block["type"] == "Material":
-            facts.materials[prim_path] = _material_has_surface_text(prim_path, own_text, blocks)
+            complete = _material_has_surface_text(prim_path, own_text, blocks)
+            facts.materials[prim_path] = facts.materials.get(prim_path, False) or complete
         for asset in _find_reference_paths(own_text):
             facts.references.append((prim_path, asset))
         for target in _find_binding_targets(own_text):
@@ -1085,6 +1101,48 @@ def _skip_prim_metadata(text: str, index: int) -> int:
         index = close + 1
 
 
+_VARIANT_SET_RE = re.compile(r'\bvariantSet\s+"[^"]*"\s*=\s*\{')
+_VARIANT_ENTRY_RE = re.compile(r'(?m)^[ \t]*"[^"]*"\s*\{')
+
+
+def _variant_block_spans(text: str) -> List[Tuple[int, int]]:
+    """Return spans of every variantSet block and every variant block in it.
+
+    Both open a brace level that does not correspond to a prim, so path
+    inference has to discount them.
+    """
+    spans: List[Tuple[int, int]] = []
+    for match in _VARIANT_SET_RE.finditer(text):
+        open_index = match.end() - 1
+        close_index = _matching_delimiter(text, open_index, "{", "}")
+        if close_index == -1:
+            continue
+        spans.append((match.start(), close_index))
+        inner = text[open_index + 1 : close_index]
+        base = open_index + 1
+        for entry in _VARIANT_ENTRY_RE.finditer(inner):
+            entry_open = base + entry.end() - 1
+            entry_close = _matching_delimiter(text, entry_open, "{", "}")
+            if entry_close == -1:
+                continue
+            spans.append((base + entry.start(), entry_close))
+    return spans
+
+
+def _variant_depth_counts(text: str) -> List[int]:
+    """Return, for every index, how many variant blocks enclose it."""
+    delta = [0] * (len(text) + 2)
+    for open_index, close_index in _variant_block_spans(text):
+        delta[open_index] += 1
+        delta[min(close_index + 1, len(text) + 1)] -= 1
+    counts: List[int] = []
+    running = 0
+    for index in range(len(text) + 1):
+        running += delta[index]
+        counts.append(running)
+    return counts
+
+
 def _parse_usda_blocks(text: str) -> List[Dict[str, Any]]:
     """Parse USDA text into nested prim blocks.
 
@@ -1102,12 +1160,18 @@ def _parse_usda_blocks(text: str) -> List[Dict[str, Any]]:
         elif char == "}":
             depth = max(0, depth - 1)
         depth_at.append(depth)
+    # variantSet blocks and their per-variant blocks are composition
+    # scaffolding, not prim nesting, so their braces must not shift a prim's
+    # inferred path. Without this the second and later variants of a prim are
+    # nested under the first one instead of being flattened as pxr reports them.
+    variant_depth = _variant_depth_counts(stripped)
 
     blocks: List[Dict[str, Any]] = []
     stack: List[str] = []
     for match in _USDA_PRIM_RE.finditer(stripped):
         start = match.start()
-        depth = depth_at[start - 1] if start else 0
+        brace_depth = depth_at[start - 1] if start else 0
+        depth = max(0, brace_depth - variant_depth[start])
         del stack[depth:]
         name = match.group(3)
         path = "/" + "/".join(stack + [name])

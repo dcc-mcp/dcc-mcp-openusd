@@ -39,6 +39,8 @@ SUBLAYER_OFFSET = DATA_DIR / "sublayer_offset.usda"
 UNIT_MISMATCH = DATA_DIR / "unit_mismatch.usda"
 UNBOUND_MATERIAL = DATA_DIR / "unbound_material.usda"
 VARIANT_MATERIAL = DATA_DIR / "variant_material.usda"
+VARIANT_MULTI = DATA_DIR / "variant_multi.usda"
+VARIANT_SHARED_NAME = DATA_DIR / "variant_shared_name.usda"
 
 #: Every sample stage the parity test compares across runtimes.
 SAMPLES = (
@@ -52,6 +54,8 @@ SAMPLES = (
     UNIT_MISMATCH,
     UNBOUND_MATERIAL,
     VARIANT_MATERIAL,
+    VARIANT_MULTI,
+    VARIANT_SHARED_NAME,
 )
 
 
@@ -644,6 +648,62 @@ def test_material_defined_in_a_variant_block_is_visible(runtime_mode):
 
     assert "DANGLING_MATERIAL_BINDING" not in codes(result)
     assert result["valid"] is True
+
+
+def test_multiple_variants_flatten_to_the_same_level(runtime_mode):
+    """Two variants on one prim must flatten, not nest inside each other.
+
+    The text collector inferred prim nesting from raw brace depth, but
+    ``variantSet = {`` and each ``\"name\" {`` add a brace level that is not a
+    prim level. The first variant happened to line up; the second was nested
+    under it, so a binding to the second variant's material looked dangling —
+    an error that flipped ``valid`` to False.
+    """
+    result = validate_stage(str(VARIANT_MULTI))
+
+    assert "DANGLING_MATERIAL_BINDING" not in codes(result)
+    assert result["valid"] is True
+    # Both materials are reported at the flat path they compose to.
+    unbound = {issue["location"] for issue in result["issues"] if issue["code"] == "UNBOUND_MATERIAL"}
+    assert unbound == {"/Root/Looks/RedMat"}
+
+
+def test_prim_types_are_flat_under_multiple_variants():
+    """The text parser must not nest a second variant under the first."""
+    from dcc_mcp_openusd.runtime import _parse_usda_blocks
+
+    text = VARIANT_MULTI.read_text(encoding="utf-8")
+    paths = [block["path"] for block in _parse_usda_blocks(text)]
+
+    assert "/Root/Looks/RedMat" in paths
+    assert "/Root/Looks/BlueMat" in paths
+    # Nothing from the blue variant may hang off the red one.
+    assert not [path for path in paths if path.startswith("/Root/Looks/RedMat/") and "BlueMat" in path]
+
+
+def test_same_named_prim_in_two_variants_merges(runtime_mode):
+    """A name authored in several variants collapses onto one path.
+
+    The collectors used to overwrite on collision, so an empty second variant
+    discarded the complete first one and produced a false
+    INCOMPLETE_MATERIAL. Types keep the first non-empty value and material
+    completeness is OR-ed, so variant order cannot change the verdict.
+    """
+    result = validate_stage(str(VARIANT_SHARED_NAME))
+
+    assert "INCOMPLETE_MATERIAL" not in codes(result)
+    assert result["valid"] is True
+
+
+def test_merge_prim_type_keeps_the_first_non_empty_value():
+    """The merge helper must not let an empty type overwrite a real one."""
+    from dcc_mcp_openusd.runtime import _merge_prim_type
+
+    assert _merge_prim_type(None, "Mesh") == "Mesh"
+    assert _merge_prim_type("Mesh", "") == "Mesh"
+    assert _merge_prim_type("", "Mesh") == "Mesh"
+    assert _merge_prim_type("Xform", "Mesh") == "Xform"
+    assert _merge_prim_type("", "") == ""
 
 
 def test_shader_nested_deeper_than_a_direct_child_counts(runtime_mode):
