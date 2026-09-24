@@ -109,7 +109,7 @@ def test_issue_objects_keep_severity_and_message_and_add_code_and_location(runti
     assert result["issues"], "expected at least one issue for a metadata-less stage"
 
     for issue in result["issues"]:
-        assert set(issue) == {"code", "severity", "message", "location"}
+        assert set(issue) == {"code", "severity", "message", "location", "suggested_fix", "next_steps"}
         assert issue["code"] in VALIDATION_RULES
         assert issue["severity"] in {"error", "warning"}
         assert issue["message"]
@@ -825,3 +825,74 @@ def test_referenced_prims_are_out_of_scope_for_both_collectors(runtime_mode, tmp
     assert "UNBOUND_MATERIAL" not in codes(result)
     assert "INCOMPLETE_MATERIAL" not in codes(result)
     assert result["valid"] is True
+
+
+# ── suggested_fix / next_steps wiring ──────────────────────────────────────
+
+
+def test_unresolved_reference_points_at_the_reference_fix_skill(runtime_mode):
+    """A broken reference suggests fix_reference_path with the prim that owns it."""
+    result = validate_stage(str(BROKEN_REFERENCE))
+
+    issue = issue_for(result, "UNRESOLVED_REFERENCE")
+    assert issue["suggested_fix"] == {
+        "skill": "openusd_stage__fix_reference_path",
+        "args": {
+            "stage_file": str(BROKEN_REFERENCE),
+            "prim_path": "/World/SetDressing/MissingSetPiece",
+        },
+    }
+    assert issue["next_steps"][0]["action"] == "openusd_stage__fix_reference_path"
+    assert issue["next_steps"][0]["args"]["prim_path"] == "/World/SetDressing/MissingSetPiece"
+
+
+def test_material_issues_point_at_the_material_fix_skill(runtime_mode):
+    """Both material rules suggest suggest_material_bind with the prim involved."""
+    result = validate_stage(str(UNBOUND_MATERIAL))
+
+    dangling = issue_for(result, "DANGLING_MATERIAL_BINDING")
+    assert dangling["suggested_fix"]["skill"] == "openusd_material__suggest_material_bind"
+    assert dangling["suggested_fix"]["args"] == {
+        "stage_file": str(UNBOUND_MATERIAL),
+        "prim_path": "/World/Prop",
+    }
+
+    unbound = issue_for(result, "UNBOUND_MATERIAL")
+    assert unbound["suggested_fix"]["skill"] == "openusd_material__suggest_material_bind"
+    assert unbound["suggested_fix"]["args"] == {
+        "stage_file": str(UNBOUND_MATERIAL),
+        "material_path": "/World/Materials/PropPaint",
+    }
+
+
+def test_rules_without_a_fix_skill_still_carry_guidance(runtime_mode, tmp_path):
+    """Every rule yields next_steps, so an agent is never left without a next move."""
+    stage_file = tmp_path / "scene.usda"
+    stage_file.write_text('#usda 1.0\n(\n    defaultPrim = "World"\n)\n\ndef Xform "World"\n{\n}\n', encoding="utf-8")
+
+    result = validate_stage(str(stage_file))
+    assert result["issues"]
+    for issue in result["issues"]:
+        assert issue["next_steps"], issue["code"]
+        assert issue["next_steps"][0]["action"]
+
+    missing_axis = issue_for(result, "MISSING_UP_AXIS")
+    assert missing_axis["suggested_fix"] is None
+    assert missing_axis["next_steps"][0]["action"] == "manual_fix"
+    assert "upAxis" in missing_axis["next_steps"][0]["detail"]
+
+
+def test_suggested_fix_matches_across_runtimes():
+    """The fix wiring is runtime-independent, like every other issue field."""
+    if not REAL_HAS_PXR:
+        pytest.skip("runtime parity requires usd-core; the test-openusd CI job provides it")  # noqa: B028
+
+    for sample in (BROKEN_REFERENCE, UNBOUND_MATERIAL):
+        pxr_result = _validate_with(sample, has_pxr=True)
+        fallback_result = _validate_with(sample, has_pxr=False)
+        assert [i["suggested_fix"] for i in pxr_result["issues"]] == [
+            i["suggested_fix"] for i in fallback_result["issues"]
+        ], sample.name
+        assert [i["next_steps"] for i in pxr_result["issues"]] == [
+            i["next_steps"] for i in fallback_result["issues"]
+        ], sample.name

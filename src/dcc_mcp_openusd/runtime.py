@@ -392,6 +392,39 @@ VALIDATION_RULES: Dict[str, str] = {
     "UNDEFINED_PRIM_TYPE": "Nested prim is defined without a type name",
 }
 
+#: Fix skill that can act on a rule code. Only codes with a real, offline-
+#: testable fix skill are listed; everything else falls back to written guidance.
+_FIX_SKILL_BY_CODE: Dict[str, str] = {
+    "UNRESOLVED_REFERENCE": "openusd_stage__fix_reference_path",
+    "DANGLING_MATERIAL_BINDING": "openusd_material__suggest_material_bind",
+    "UNBOUND_MATERIAL": "openusd_material__suggest_material_bind",
+}
+
+#: Written recovery guidance for every rule. The three codes that have a fix
+#: skill are listed as well: they are the fallback used when no stage path is
+#: available to build ``suggested_fix`` args from, so ``next_steps`` stays
+#: non-empty for every rule instead of depending on the caller.
+_GUIDANCE_BY_CODE: Dict[str, str] = {
+    "UNRESOLVED_REFERENCE": "Repair the reference asset path or point it at a file that exists",
+    "DANGLING_MATERIAL_BINDING": "Rebind the prim to a Material that exists",
+    "UNBOUND_MATERIAL": "Bind the material to a prim, or delete the material",
+    "INVALID_STAGE_HEADER": "Add a '#usda 1.0' header line to the layer",
+    "BINARY_LAYER_REQUIRES_PXR": "Install usd-core, then re-run validate_stage",
+    "STAGE_OPEN_FAILED": "Repair or replace the layer that cannot be opened",
+    "MISSING_DEFAULT_PRIM": "Set defaultPrim in the root layer metadata",
+    "INVALID_DEFAULT_PRIM": "Point defaultPrim at a prim that exists",
+    "MISSING_UP_AXIS": "Set upAxis in the root layer metadata",
+    "INVALID_UP_AXIS": "Set upAxis to one of X, Y, or Z",
+    "UP_AXIS_MISMATCH": "Align the sublayer upAxis with the root layer",
+    "MISSING_METERS_PER_UNIT": "Set metersPerUnit in the root layer metadata",
+    "INVALID_METERS_PER_UNIT": "Set metersPerUnit to a positive number",
+    "METERS_PER_UNIT_MISMATCH": "Align the sublayer metersPerUnit with the root layer",
+    "REFERENCE_CYCLE": "Break the reference loop between the listed layers",
+    "INCOMPLETE_MATERIAL": "Add a UsdPreviewSurface shader and connect it to outputs:surface",
+    "NO_TRAVERSABLE_PRIMS": "Author at least one prim in the stage",
+    "UNDEFINED_PRIM_TYPE": 'Give the prim a type name, e.g. def Xform "Name"',
+}
+
 _RULE_SEVERITY: Dict[str, str] = {
     "INVALID_STAGE_HEADER": "error",
     "BINARY_LAYER_REQUIRES_PXR": "error",
@@ -433,6 +466,10 @@ class _StageFacts:
     header_ok: bool = False
     binary_layer: bool = False
     open_error: Optional[str] = None
+    #: True once a collector has actually filled these facts. The initial facts
+    #: built from layer metadata alone are *not* collected, and every list on
+    #: them is empty -- indistinguishable from a stage with nothing in it.
+    collected: bool = False
     prim_types: Dict[str, str] = field(default_factory=dict)
     untyped_prims: Set[str] = field(default_factory=set)
     materials: Dict[str, bool] = field(default_factory=dict)
@@ -458,6 +495,26 @@ def validate_stage(stage_file: str, strict: bool = False) -> Dict[str, Any]:
     marker).
     """
     path = _existing_file(stage_file)
+    facts, runtime = _collect_stage_facts(path)
+    issues = _run_validators(facts, strict)
+    return {
+        "stage_file": str(path),
+        "valid": not any(issue["severity"] == "error" for issue in issues),
+        "issue_count": len(issues),
+        "issues": issues,
+        "runtime": runtime,
+        "rules": sorted(VALIDATION_RULES),
+    }
+
+
+def _collect_stage_facts(path: Path) -> Tuple[_StageFacts, str]:
+    """Collect stage facts with the best runtime available.
+
+    Shared by :func:`validate_stage` and the fix helpers so a fix operates on
+    exactly the facts the validator judged, whichever runtime produced them.
+
+    Returns the facts and the runtime label ("pxr" or "text-fallback").
+    """
     chain = _collect_layer_chain(path)
     root_meta = chain[0] if chain else {}
 
@@ -483,16 +540,7 @@ def validate_stage(stage_file: str, strict: bool = False) -> Dict[str, Any]:
     elif not facts.binary_layer:
         # A binary layer is unreadable without pxr; BINARY_LAYER_REQUIRES_PXR reports it.
         facts = _collect_facts_text(path, chain)
-
-    issues = _run_validators(facts, strict)
-    return {
-        "stage_file": str(path),
-        "valid": not any(issue["severity"] == "error" for issue in issues),
-        "issue_count": len(issues),
-        "issues": issues,
-        "runtime": runtime,
-        "rules": sorted(VALIDATION_RULES),
-    }
+    return facts, runtime
 
 
 def _collect_facts_pxr(path: Path, chain: List[Dict[str, Any]]) -> _StageFacts:
@@ -536,6 +584,7 @@ def _collect_facts_pxr(path: Path, chain: List[Dict[str, Any]]) -> _StageFacts:
             for target in targets.GetAppliedItems():
                 facts.bindings.append((prim_path, _strip_property_suffix(str(target))))
 
+    facts.collected = True
     return facts
 
 
@@ -623,6 +672,7 @@ def _collect_facts_text(path: Path, chain: List[Dict[str, Any]]) -> _StageFacts:
     facts.binary_layer = bool(chain and chain[0].get("binary"))
     if facts.binary_layer:
         return facts
+    facts.collected = True
 
     text = path.read_text(encoding="utf-8", errors="replace")
     blocks = _parse_usda_blocks(text)
@@ -664,17 +714,40 @@ def _is_material_binding_name(name: str) -> bool:
     return name.startswith("material:binding:") and not name.startswith("material:binding:collection")
 
 
-def _run_validators(facts: _StageFacts, strict: bool) -> List[Dict[str, str]]:
+def _run_validators(facts: _StageFacts, strict: bool) -> List[Dict[str, Any]]:
     """Apply the shared rule set to collected stage facts."""
-    issues: List[Dict[str, str]] = []
+    issues: List[Dict[str, Any]] = []
+    stage_file = str(facts.stage_path) if facts.stage_path else ""
 
-    def add(code: str, message: str, location: str = "/") -> None:
+    def next_steps_for(code: str, **fix_args: Optional[str]) -> Tuple[Optional[Dict[str, Any]], List[Dict[str, Any]]]:
+        """Return ``(suggested_fix, next_steps)`` for one issue.
+
+        The ``suggested_fix`` shape is deliberately minimal
+        (``{"skill": ..., "args": {...}}``) because the final
+        ``ValidationIssue`` schema is owned by a separate change and will
+        replace it in one pass. Rules with no fix skill still get a
+        ``next_steps`` entry so the caller is never left without guidance.
+        """
+        skill = _FIX_SKILL_BY_CODE.get(code)
+        if skill and stage_file:
+            args: Dict[str, Any] = {"stage_file": stage_file}
+            args.update({key: value for key, value in fix_args.items() if value})
+            return {"skill": skill, "args": args}, [{"action": skill, "args": dict(args)}]
+        guidance = _GUIDANCE_BY_CODE.get(code)
+        if not guidance:
+            return None, []
+        return None, [{"action": "manual_fix", "detail": guidance}]
+
+    def add(code: str, message: str, location: str = "/", **fix_args: Optional[str]) -> None:
+        suggested_fix, next_steps = next_steps_for(code, **fix_args)
         issues.append(
             {
                 "code": code,
                 "severity": "error" if strict and code in _STRICT_ERROR_RULES else _RULE_SEVERITY[code],
                 "message": message,
                 "location": location,
+                "suggested_fix": suggested_fix,
+                "next_steps": next_steps,
             }
         )
 
@@ -753,7 +826,12 @@ def _run_validators(facts: _StageFacts, strict: bool) -> List[Dict[str, str]]:
             continue
         resolved = _resolve_asset_path(facts.stage_dir, asset)
         if not resolved.exists():
-            add("UNRESOLVED_REFERENCE", f"Reference '{asset}' cannot be resolved on disk", prim_path)
+            add(
+                "UNRESOLVED_REFERENCE",
+                f"Reference '{asset}' cannot be resolved on disk",
+                prim_path,
+                prim_path=prim_path,
+            )
 
     if facts.stage_path is not None:
         cycle = _detect_reference_cycle(facts.stage_path)
@@ -769,12 +847,14 @@ def _run_validators(facts: _StageFacts, strict: bool) -> List[Dict[str, str]]:
                 "DANGLING_MATERIAL_BINDING",
                 f"material:binding targets '{target}' which does not exist",
                 prim_path,
+                prim_path=prim_path,
             )
         elif target_type != "Material":
             add(
                 "DANGLING_MATERIAL_BINDING",
                 f"material:binding targets '{target}' which is a '{target_type or 'typeless'}' prim, not a Material",
                 prim_path,
+                prim_path=prim_path,
             )
 
     for material_path in sorted(facts.materials):
@@ -785,7 +865,12 @@ def _run_validators(facts: _StageFacts, strict: bool) -> List[Dict[str, str]]:
                 material_path,
             )
         if material_path not in bound_targets:
-            add("UNBOUND_MATERIAL", f"Material '{material_path}' is not bound to any prim", material_path)
+            add(
+                "UNBOUND_MATERIAL",
+                f"Material '{material_path}' is not bound to any prim",
+                material_path,
+                material_path=material_path,
+            )
 
     # ── hierarchy ──────────────────────────────────────────────────────────
     if not facts.prim_types:
@@ -794,6 +879,656 @@ def _run_validators(facts: _StageFacts, strict: bool) -> List[Dict[str, str]]:
         add("UNDEFINED_PRIM_TYPE", f"Prim '{prim_path}' is defined without a type name", prim_path)
 
     return issues
+
+
+# ---------------------------------------------------------------------------
+# Fix skills
+# ---------------------------------------------------------------------------
+
+#: Maximum directory depth :func:`fix_reference_path` descends while searching
+#: an asset library, and the cap on candidates it reports.
+_SEARCH_MAX_DEPTH = 4
+_SEARCH_MAX_MATCHES = 10
+
+#: Prim types a material may reasonably be bound to. ``Scope`` and the shader
+#: prims are excluded: binding a Scope hides nothing and binding a Shader is a
+#: composition error, so neither belongs in a bind suggestion.
+_BINDABLE_PRIM_TYPES = frozenset(
+    {
+        "Xform",
+        "Mesh",
+        "Points",
+        "Cube",
+        "Sphere",
+        "Cone",
+        "Cylinder",
+        "Capsule",
+        "Card",
+        "Plane",
+        "Grid",
+        "BasisCurves",
+        "NurbsCurves",
+        "NurbsPatch",
+        "GeomSubset",
+        "Volume",
+    }
+)
+
+
+def find_unresolved_references(stage_file: str, prim_path: Optional[str] = None) -> Dict[str, Any]:
+    """Return every root-layer reference that cannot be resolved on disk.
+
+    Read-only companion of :func:`fix_reference_path`: it reports the same
+    ``UNRESOLVED_REFERENCE`` facts :func:`validate_stage` reports, including the
+    asset path, so a caller can search for a replacement without re-parsing.
+    """
+    path = _existing_file(stage_file)
+    facts, runtime = _collect_stage_facts(path)
+    return {
+        "stage_file": str(path),
+        "runtime": runtime,
+        "count": len(_unresolved_reference_targets(facts, prim_path)),
+        "unresolved": _unresolved_reference_targets(facts, prim_path),
+    }
+
+
+def _uninspectable_detail(facts: _StageFacts) -> Optional[str]:
+    """Return why *facts* could not be inspected, or ``None`` when they could.
+
+    The three conditions mirror the layer-integrity rules
+    :func:`validate_stage` already reports, so a fix skill can never call a
+    stage clean that the validator calls an error. Without this, a stage the
+    collectors could not read yields empty facts, which reads exactly like a
+    stage with nothing wrong with it.
+    """
+    if facts.open_error:
+        return "Stage could not be opened: %s" % facts.open_error
+    if facts.binary_layer and not facts.collected:
+        # Whether the binary layer was read is a fact, not a capability probe:
+        # a partial pxr install can report has_pxr while the collector's own
+        # Sdf import fails, which leaves these facts unfilled.
+        return "Layer is binary; inspecting it requires a working pxr runtime"
+    if not facts.binary_layer and not facts.header_ok:
+        return "Layer is not a text USD layer; it does not start with a #usda header"
+    return None
+
+
+def _blocked_failure(prim_path: Optional[str], detail: str) -> List[Dict[str, Any]]:
+    """Build the failed-target list for a stage that could not be inspected."""
+    return [
+        {
+            "prim_path": prim_path or "",
+            "asset_path": "",
+            "status": "failed",
+            "detail": detail,
+            "candidates": [],
+        }
+    ]
+
+
+def fix_reference_path(
+    stage_file: str,
+    prim_path: Optional[str] = None,
+    asset_path: Optional[str] = None,
+    search_dirs: Optional[List[str]] = None,
+    apply: bool = False,
+) -> Dict[str, Any]:
+    """Repair broken reference/payload asset paths in a stage.
+
+    With ``apply=False`` (the default) the stage is left untouched and every
+    target comes back with ``status="planned"`` (a replacement exists but was
+    not written) or ``status="unresolved"`` (nothing usable was found). With
+    ``apply=True`` a found replacement is authored into the layer and read back.
+
+    A replacement comes from ``asset_path`` when given, otherwise from a
+    basename search under ``search_dirs``. Nothing is ever reported as fixed
+    without a replacement that exists on disk, and a rewrite that cannot be
+    applied is reported as ``status="failed"`` rather than skipped.
+    """
+    path = _existing_file(stage_file)
+    facts, runtime = _collect_stage_facts(path)
+
+    # An unreadable stage must not look like a clean one: empty facts are
+    # indistinguishable from a stage with nothing wrong with it.
+    uninspectable = _uninspectable_detail(facts)
+    if uninspectable:
+        return _fix_result(path, runtime, _blocked_failure(prim_path, uninspectable))
+
+    targets = _unresolved_reference_targets(facts, prim_path)
+    explicit = _resolve_replacement_asset(path.parent, asset_path) if asset_path else None
+
+    if asset_path and explicit is None:
+        detail = "asset_path '%s' does not exist on disk" % asset_path
+        failed = [
+            {"prim_path": prim_path or "", "asset_path": "", "status": "failed", "detail": detail, "candidates": []}
+        ]
+        return _fix_result(path, runtime, failed)
+
+    if asset_path and len(targets) > 1:
+        # The filter narrows the prim, not the reference: one prim can author
+        # several broken references, and a single asset_path silently collapsing
+        # them into one would drop a reference while still reading back fixed.
+        detail = (
+            "several broken references match this filter; one asset_path can only replace "
+            "one of them, so narrow the filter to a single reference"
+        )
+        failed = [
+            {
+                "prim_path": target["prim_path"],
+                "asset_path": target["asset_path"],
+                "status": "failed",
+                "detail": detail,
+                "candidates": [],
+            }
+            for target in targets
+        ]
+        return _fix_result(path, runtime, failed)
+
+    # Plan every replacement before writing any of them, so a collision can be
+    # rejected without leaving a half-rewritten layer behind.
+    planned: List[Dict[str, Any]] = []
+    for target in targets:
+        replacement = explicit
+        candidates: List[str] = []
+        if replacement is None and search_dirs:
+            candidates = _search_asset_candidates(target["basename"], search_dirs)
+            if candidates:
+                replacement = Path(candidates[0])
+        if replacement is None:
+            planned.append(
+                {
+                    "prim_path": target["prim_path"],
+                    "asset_path": target["asset_path"],
+                    "status": "unresolved",
+                    "detail": "no replacement found; pass asset_path or search_dirs",
+                    "candidates": candidates,
+                }
+            )
+            continue
+        planned.append(
+            {
+                "target": target,
+                "replacement": replacement,
+                "candidates": candidates,
+                "new_asset": _relative_asset_path(path.parent, replacement),
+            }
+        )
+
+    collapse = _collapsing_replacement(planned)
+    if collapse is not None:
+        prim, new_asset = collapse
+        detail = (
+            "prim '%s' has several broken references that would all be rewritten to '%s'; "
+            "give each one its own replacement" % (prim, new_asset)
+        )
+        failed = [
+            {
+                "prim_path": item["target"]["prim_path"],
+                "asset_path": item["target"]["asset_path"],
+                "status": "failed",
+                "detail": detail,
+                "candidates": item["candidates"],
+            }
+            for item in planned
+            if item.get("status") != "unresolved"
+        ]
+        unresolved = [item for item in planned if item.get("status") == "unresolved"]
+        return _fix_result(path, runtime, failed, unresolved)
+
+    resolved_targets: List[Dict[str, Any]] = []
+    for item in planned:
+        if item.get("status") == "unresolved":
+            resolved_targets.append(item)
+            continue
+        resolved_targets.append(
+            _rewrite_reference(path, facts, item["target"], item["replacement"], item["candidates"], apply=apply)
+        )
+
+    applied = any(target["status"] == "fixed" for target in resolved_targets)
+    unresolved_targets = [target for target in resolved_targets if target["status"] == "unresolved"]
+    failed_targets = [target for target in resolved_targets if target["status"] == "failed"]
+    # Verified means the whole call did what it claimed, not "at least one
+    # target was written".
+    verified = applied and not unresolved_targets and not failed_targets
+    return {
+        "stage_file": str(path),
+        "runtime": runtime,
+        "applied": applied,
+        "targets": resolved_targets,
+        "unresolved": [dict(target) for target in resolved_targets if target["status"] == "unresolved"],
+        "failed": [dict(target) for target in resolved_targets if target["status"] == "failed"],
+        "verified": verified,
+    }
+
+
+def suggest_material_bind(
+    stage_file: str,
+    prim_path: Optional[str] = None,
+    material_path: Optional[str] = None,
+    apply: bool = False,
+) -> Dict[str, Any]:
+    """Suggest -- and optionally apply -- material bindings for a stage.
+
+    Suggestions cover the two material rules :func:`validate_stage` emits: a
+    binding pointing at a missing or non-Material prim, and a Material that is
+    defined but never bound. Each suggestion carries every candidate the stage
+    actually offers, so the caller can pick one without a second call.
+
+    With ``apply=True`` the binding is written through :func:`bind_material`,
+    which needs the ``pxr`` runtime; without it the call fails instead of
+    reporting success. There is no asset-library search: a suggestion is built
+    only from materials and prims that already exist in the stage.
+    """
+    path = _existing_file(stage_file)
+    facts, runtime = _collect_stage_facts(path)
+
+    wanted_prim = _normalize_prim_path(prim_path) if prim_path else None
+    wanted_material = _normalize_prim_path(material_path) if material_path else None
+
+    # Same rule as fix_reference_path: no suggestions is only a clean stage if
+    # the stage could actually be read.
+    uninspectable = _uninspectable_detail(facts)
+    if uninspectable:
+        return {
+            "stage_file": str(path),
+            "runtime": runtime,
+            "applied": False,
+            "suggestions": [],
+            "unresolved": [],
+            "failed": [
+                {
+                    "prim_path": wanted_prim or "",
+                    "material_path": wanted_material or "",
+                    "status": "failed",
+                    "detail": uninspectable,
+                    "candidates": [],
+                }
+            ],
+            "verified": False,
+        }
+
+    materials = sorted(facts.materials)
+    bound_targets = {target for _, target in facts.bindings}
+    bound_prims = {source for source, _ in facts.bindings}
+    bindable_prims = sorted(
+        candidate
+        for candidate, prim_type in facts.prim_types.items()
+        if prim_type in _BINDABLE_PRIM_TYPES and candidate not in materials
+    )
+
+    suggestions = []
+    if wanted_prim and wanted_material:
+        suggestions.append(
+            {
+                "prim_path": wanted_prim,
+                "material_path": wanted_material,
+                "reason": "explicit_request",
+                "detail": "Caller supplied both prim_path and material_path",
+                "candidates": [wanted_material],
+                "auto_bindable": True,
+            }
+        )
+    else:
+        for source, target in facts.bindings:
+            if wanted_prim and source != wanted_prim:
+                continue
+            target_type = facts.prim_types.get(target)
+            if target_type == "Material":
+                continue
+            candidates = _rank_by_name(materials, target)
+            if wanted_material:
+                # A caller that names a material only wants suggestions that
+                # material can satisfy. Without this the loop answers with some
+                # other material and the "filter matched nothing" warning can
+                # never fire while the stage has any other issue.
+                if wanted_material not in candidates:
+                    continue
+                candidates = [wanted_material] + [item for item in candidates if item != wanted_material]
+            if target_type is None:
+                reason = "dangling_material_binding"
+                detail = "material:binding targets '%s' which does not exist" % target
+            else:
+                reason = "non_material_binding_target"
+                detail = "material:binding targets '%s', a '%s' prim, not a Material" % (
+                    target,
+                    target_type or "typeless",
+                )
+            suggestions.append(
+                {
+                    "prim_path": source,
+                    "material_path": candidates[0] if candidates else "",
+                    "reason": reason,
+                    "detail": detail,
+                    "candidates": candidates,
+                    "auto_bindable": bool(candidates),
+                }
+            )
+
+        for material in materials:
+            if wanted_material and material != wanted_material:
+                continue
+            if material in bound_targets:
+                continue
+            if wanted_prim:
+                # The caller named the prim to fix. If that prim cannot carry a
+                # binding (a Scope, a Material, or a path that does not exist)
+                # there is nothing to suggest for it -- falling back to another
+                # prim would answer a question the caller did not ask.
+                if wanted_prim not in bindable_prims:
+                    continue
+                candidates = [wanted_prim]
+            else:
+                open_prims = [candidate for candidate in bindable_prims if candidate not in bound_prims]
+                candidates = _rank_by_name(open_prims or bindable_prims, material)
+            suggestions.append(
+                {
+                    "prim_path": candidates[0] if candidates else "",
+                    "material_path": material,
+                    "reason": "unbound_material",
+                    "detail": "Material '%s' is not bound to any prim" % material,
+                    "candidates": candidates,
+                    "auto_bindable": bool(candidates),
+                }
+            )
+
+    result = {
+        "stage_file": str(path),
+        "runtime": runtime,
+        "applied": False,
+        "suggestions": suggestions,
+        "unresolved": [dict(item) for item in suggestions if not item["candidates"]],
+        "failed": [],
+        "verified": False,
+    }
+    if not apply:
+        return result
+
+    if not wanted_prim or not wanted_material:
+        result["failed"] = [
+            {
+                "prim_path": wanted_prim or "",
+                "material_path": wanted_material or "",
+                "status": "failed",
+                "detail": "apply=true requires both prim_path and material_path",
+                "candidates": [],
+            }
+        ]
+        return result
+
+    if not detect_runtime().has_pxr:
+        result["failed"] = [
+            {
+                "prim_path": wanted_prim,
+                "material_path": wanted_material,
+                "status": "failed",
+                "detail": (
+                    "Applying a material binding requires the pxr runtime; "
+                    "install usd-core or apply the suggestion manually"
+                ),
+                "candidates": [wanted_material],
+            }
+        ]
+        return result
+
+    bind_material(str(path), wanted_prim, wanted_material)
+    after, _runtime = _collect_stage_facts(path)
+    verified = (wanted_prim, wanted_material) in after.bindings
+    result["applied"] = True
+    result["verified"] = verified
+    if not verified:
+        result["failed"] = [
+            {
+                "prim_path": wanted_prim,
+                "material_path": wanted_material,
+                "status": "failed",
+                "detail": "bind_material returned but the binding is not visible after re-reading the stage",
+                "candidates": [wanted_material],
+            }
+        ]
+    return result
+
+
+def _fix_result(
+    path: Path,
+    runtime: str,
+    failed: List[Dict[str, Any]],
+    unresolved: Optional[List[Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
+    """Build a :func:`fix_reference_path` result whose listed targets failed.
+
+    *unresolved* targets are reported alongside the failures rather than being
+    dropped: a collision on one prim says nothing about a target elsewhere that
+    simply had no candidate, and silently omitting it would hide work that
+    still needs doing.
+    """
+    kept_unresolved = list(unresolved or [])
+    return {
+        "stage_file": str(path),
+        "runtime": runtime,
+        "applied": False,
+        "targets": list(failed) + kept_unresolved,
+        "unresolved": kept_unresolved,
+        "failed": list(failed),
+        "verified": False,
+    }
+
+
+def _unresolved_reference_targets(facts: _StageFacts, prim_path: Optional[str]) -> List[Dict[str, Any]]:
+    """Collect the unresolved reference facts *prim_path* selects (all when None)."""
+    wanted = _normalize_prim_path(prim_path) if prim_path else None
+    targets = []
+    seen = set()
+    for ref_prim, asset in facts.references:
+        if _is_dynamic_asset_path(asset):
+            continue
+        if wanted is not None and ref_prim != wanted:
+            continue
+        resolved = _resolve_asset_path(facts.stage_dir, asset)
+        if resolved.exists():
+            continue
+        key = (ref_prim, asset)
+        if key in seen:
+            continue
+        seen.add(key)
+        targets.append(
+            {
+                "prim_path": ref_prim,
+                "asset_path": asset,
+                "resolved_path": str(resolved),
+                "basename": resolved.name,
+            }
+        )
+    return targets
+
+
+def _resolve_replacement_asset(stage_dir: Path, asset_path: str) -> Optional[Path]:
+    """Resolve a caller-supplied replacement asset, or return ``None``.
+
+    Relative paths are tried against the stage directory first and then the
+    current directory, which is how an agent naturally reads a broken
+    ``./assets/...`` reference. A path that does not exist yields ``None`` so
+    the caller fails instead of authoring another broken path.
+    """
+    candidate = Path(asset_path).expanduser()
+    if not candidate.is_absolute():
+        relative_to_stage = (stage_dir / candidate).resolve()
+        if relative_to_stage.is_file():
+            return relative_to_stage
+        candidate = candidate.resolve()
+    else:
+        candidate = candidate.resolve()
+    return candidate if candidate.is_file() else None
+
+
+def _search_asset_candidates(basename: str, search_dirs: List[str]) -> List[str]:
+    """Find files named *basename* under *search_dirs*, shallowest first.
+
+    The walk is bounded by :data:`_SEARCH_MAX_DEPTH` and
+    :data:`_SEARCH_MAX_MATCHES` so an asset library cannot turn a fix into an
+    unbounded scan.
+    """
+    if not basename:
+        return []
+    candidates = []
+    seen = set()
+    for raw_dir in search_dirs:
+        root = Path(raw_dir).expanduser()
+        if not root.is_dir():
+            continue
+        for dirpath, dirnames, filenames in os.walk(str(root)):
+            try:
+                depth = len(Path(dirpath).relative_to(root).parts)
+            except ValueError:
+                depth = 0
+            if depth >= _SEARCH_MAX_DEPTH:
+                dirnames[:] = []
+            dirnames[:] = sorted(name for name in dirnames if not name.startswith("."))
+            for name in sorted(filenames):
+                if name != basename:
+                    continue
+                candidate = Path(dirpath) / name
+                key = _layer_key(candidate)
+                if key in seen:
+                    continue
+                seen.add(key)
+                candidates.append(str(candidate))
+                if len(candidates) >= _SEARCH_MAX_MATCHES:
+                    return candidates
+    return candidates
+
+
+def _rewrite_reference(
+    path: Path,
+    facts: _StageFacts,
+    target: Dict[str, Any],
+    replacement: Path,
+    candidates: List[str],
+    *,
+    apply: bool,
+) -> Dict[str, Any]:
+    """Author *replacement* over a broken reference and read the result back."""
+    prim_path = target["prim_path"]
+    old_asset = target["asset_path"]
+    new_asset = _relative_asset_path(path.parent, replacement)
+    entry = {
+        "prim_path": prim_path,
+        "asset_path": old_asset,
+        "replacement": new_asset,
+        "candidates": candidates or [str(replacement)],
+    }
+
+    if not apply:
+        entry["status"] = "planned"
+        entry["detail"] = "Replacement '%s' found; nothing written" % new_asset
+        return entry
+
+    if facts.binary_layer:
+        entry["status"] = "failed"
+        entry["detail"] = "Layer is binary; rewriting a reference requires the pxr runtime"
+        return entry
+
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        entry["status"] = "failed"
+        entry["detail"] = "Layer could not be read for rewriting: %s" % exc
+        return entry
+
+    new_text, replacements = _replace_reference_asset(text, prim_path, old_asset, new_asset)
+    if replacements == 0:
+        entry["status"] = "failed"
+        entry["detail"] = "No reference to '%s' is authored on prim '%s'" % (old_asset, prim_path)
+        return entry
+
+    try:
+        path.write_text(new_text, encoding="utf-8")
+    except OSError as exc:
+        entry["status"] = "failed"
+        entry["detail"] = "Layer could not be written: %s" % exc
+        return entry
+
+    after, _runtime = _collect_stage_facts(path)
+    authored = (prim_path, new_asset) in after.references
+    on_disk = _resolve_asset_path(after.stage_dir, new_asset).exists()
+    entry["status"] = "fixed" if authored and on_disk else "failed"
+    entry["replacements"] = replacements
+    entry["verified"] = authored and on_disk
+    if authored and on_disk:
+        entry["detail"] = "Rewrote %d reference(s) to '%s'" % (replacements, new_asset)
+    else:
+        entry["detail"] = "Layer was written but the readback disagrees: authored=%s resolved_on_disk=%s" % (
+            authored,
+            on_disk,
+        )
+    return entry
+
+
+def _collapsing_replacement(planned: List[Dict[str, Any]]) -> Optional[Tuple[str, str]]:
+    """Return the first ``(prim_path, replacement)`` that two planned targets share.
+
+    Two broken references on one prim are two authorings. Rewriting both to one
+    asset drops one of them, yet the readback would still find that asset on the
+    prim and report both as fixed, so the collision is rejected instead. Returns
+    ``None`` when no two targets collide.
+    """
+    seen: Set[Tuple[str, str]] = set()
+    for item in planned:
+        if item.get("status") == "unresolved":
+            continue
+        key = (item["target"]["prim_path"], item["new_asset"])
+        if key in seen:
+            return key
+        seen.add(key)
+    return None
+
+
+def _replace_reference_asset(text: str, prim_path: str, old_asset: str, new_asset: str) -> Tuple[str, int]:
+    """Replace *old_asset* with *new_asset* in the reference statements of one prim.
+
+    Only spans the prim owns are rewritten, so a child prim that happens to
+    reference the same broken path keeps its own authoring. Scanning runs on the
+    comment-masked text so a commented-out reference is left alone. Returns
+    ``(text, replacements)``; ``replacements == 0`` means the prim does not
+    author *old_asset*, which callers must treat as a failure rather than a
+    silent no-op.
+    """
+    masked = _mask_usda_comments(text)
+    blocks = _parse_usda_blocks(masked)
+    block = next((item for item in blocks if item["path"] == prim_path), None)
+    if block is None:
+        return text, 0
+    spans = []
+    for start, end in block["own_spans"]:
+        # Scan the masked text so a commented-out reference is left alone;
+        # masking preserves every offset, so spans still index into the original.
+        for asset_start, asset_end, asset in _reference_asset_spans(masked[start:end]):
+            if asset == old_asset:
+                spans.append((start + asset_start, start + asset_end))
+    if not spans:
+        return text, 0
+    result = text
+    # Rewrite back to front so earlier offsets stay valid.
+    for start, end in reversed(spans):
+        result = result[:start] + "@" + new_asset + "@" + result[end:]
+    return result, len(spans)
+
+
+def _rank_by_name(candidates: List[str], wanted: str) -> List[str]:
+    """Order *candidates* by how closely their prim name resembles *wanted*.
+
+    A dangling binding to ``/World/Materials/MissingPropPaint`` ranks
+    ``/World/Materials/PropPaint`` first, which is the suggestion a human would
+    make; ties fall back to path order so the output stays deterministic.
+    """
+    wanted_name = wanted.rstrip("/").rsplit("/", 1)[-1].lower()
+
+    def key(candidate):
+        name = candidate.rstrip("/").rsplit("/", 1)[-1].lower()
+        exact = 0 if name == wanted_name else 1
+        partial = 0 if wanted_name and (wanted_name in name or name in wanted_name) else 1
+        return (exact, partial, candidate)
+
+    return sorted(candidates, key=key)
 
 
 def snapshot_stage(stage_file: str, output_dir: str, name: Optional[str] = None) -> Dict[str, Any]:
@@ -1039,6 +1774,50 @@ def _strip_usda_comments(text: str) -> str:
     return "".join(out)
 
 
+def _mask_usda_comments(text: str) -> str:
+    """Blank ``#`` comments in place, preserving every character offset.
+
+    :func:`_strip_usda_comments` drops comment text and therefore renumbers
+    character offsets, which makes it unusable for rewrite helpers. This
+    variant replaces the comment body with spaces instead, so the block
+    positions :func:`_parse_usda_blocks` reports stay valid against the
+    original file. Newlines survive, so line numbers are unchanged too, and
+    quoted strings and ``@asset@`` paths are left untouched.
+    """
+    chars = list(text)
+    quote: Optional[str] = None
+    index = 0
+    length = len(text)
+    while index < length:
+        char = text[index]
+        if quote:
+            if char == "\\" and index + 1 < length:
+                index += 2
+                continue
+            if char == quote:
+                quote = None
+            index += 1
+            continue
+        if char in "\"'":
+            quote = char
+            index += 1
+            continue
+        if char == "@":
+            delimiter = "@@" if text.startswith("@@", index) else "@"
+            end = text.find(delimiter, index + len(delimiter))
+            index = length if end == -1 else end + len(delimiter)
+            continue
+        if char == "#" and not (index == 0 and text.startswith("#usda")):
+            newline = text.find("\n", index)
+            stop = length if newline == -1 else newline
+            for position in range(index, stop):
+                chars[position] = " "
+            index = length if newline == -1 else newline + 1
+            continue
+        index += 1
+    return "".join(chars)
+
+
 def _skip_usda_token(text: str, index: int) -> int:
     """Return the index just past the quoted string or asset path at *index*."""
     char = text[index]
@@ -1228,14 +2007,16 @@ def _parse_usda_blocks(text: str) -> List[Dict[str, Any]]:
         children_by_parent.setdefault(block["parent"], []).append(block)
 
     for block in blocks:
-        segments: List[str] = [stripped[block["start"] : block["brace"] + 1]]
+        spans: List[Tuple[int, int]] = [(block["start"], block["brace"] + 1)]
         cursor = block["brace"] + 1
         for child in sorted(children_by_parent.get(block["path"], []), key=lambda item: item["start"]):
             if child["start"] >= cursor:
-                segments.append(stripped[cursor : child["start"]])
+                spans.append((cursor, child["start"]))
                 cursor = max(cursor, child["close"] + 1)
-        segments.append(stripped[cursor : block["close"]])
-        block["own_text"] = "".join(segments)
+        spans.append((cursor, block["close"]))
+        spans = [(start, end) for start, end in spans if end > start]
+        block["own_spans"] = spans
+        block["own_text"] = "".join(stripped[start:end] for start, end in spans)
 
     return blocks
 
@@ -1417,7 +2198,17 @@ def _strip_property_suffix(target: str) -> str:
 
 def _find_reference_paths(body: str) -> List[str]:
     """Return every asset path authored by a ``references``/``payload`` statement."""
-    assets: List[str] = []
+    return [asset for _, _, asset in _reference_asset_spans(body)]
+
+
+def _reference_asset_spans(body: str) -> List[Tuple[int, int, str]]:
+    """Return ``(start, end, asset_path)`` for every reference/payload asset in *body*.
+
+    The offsets cover the whole ``@...@`` token and are relative to *body*, so a
+    rewrite helper can turn them into file offsets by adding the offset of the
+    slice it passed in.
+    """
+    spans: List[Tuple[int, int, str]] = []
     for match in _REFERENCE_RE.finditer(body):
         index = match.end()
         depth = 0
@@ -1430,8 +2221,11 @@ def _find_reference_paths(body: str) -> List[str]:
             elif char == "\n" and depth == 0:
                 break
             index += 1
-        assets.extend(asset for asset in _ASSET_PATH_RE.findall(body[match.end() : index]) if asset)
-    return assets
+        for asset_match in _ASSET_PATH_RE.finditer(body, match.end(), index):
+            asset = asset_match.group(1)
+            if asset:
+                spans.append((asset_match.start(), asset_match.end(), asset))
+    return spans
 
 
 def _find_binding_targets(body: str) -> List[str]:

@@ -352,3 +352,58 @@ tools:
       on-success:
         - openusd_stage__list_stage
         - openusd_validate__validate_stage
+
+  - name: fix_reference_path
+    description: >-
+      Report broken reference/payload asset paths in a stage and optionally
+      rewrite them. A replacement comes from asset_path or from a basename
+      search under search_dirs; nothing is written unless apply is true.
+    input_schema:
+      type: object
+      required: [stage_file]
+      properties:
+        stage_file:
+          type: string
+          description: Stage file whose references should be repaired.
+        prim_path:
+          type: string
+          description: >-
+            Prim that owns the broken reference. Required when asset_path is
+            given and more than one reference is broken; omit to cover every
+            broken reference in the stage.
+        asset_path:
+          type: string
+          description: >-
+            Replacement asset. Must exist on disk, otherwise the tool fails
+            instead of authoring another broken path.
+        search_dirs:
+          type: array
+          items:
+            type: string
+          description: Asset library roots searched for a file with the same basename.
+        apply:
+          type: boolean
+          default: false
+          description: Write the replacement into the layer. False reports only.
+    read_only: false
+    destructive: false
+    idempotent: true
+    execution: sync
+    affinity: any
+    enforce_thread_affinity: true
+    timeout_hint_secs: 60
+    side_effects:
+      - rewrites the reference asset path of the target prim in the root layer
+    produces:
+      - repaired_reference
+    risk: low
+    source_file: scripts/fix_reference_path.py
+    annotations:
+      read_only_hint: false
+      destructive_hint: false
+      idempotent_hint: true
+      open_world_hint: false
+    next-tools:
+      on-success:
+        - openusd_validate__validate_stage
+        - openusd_stage__list_stage

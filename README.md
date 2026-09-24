@@ -101,6 +101,8 @@ Every public function returns a `"runtime"` field in its result dict —
 | `list_stage`, `define_xform`, `define_prim` | USDA parse + insert | Native API |
 | `add_reference`, `set_xform_ops` | USDA text | Native API |
 | `validate_stage` | Shared rule set (USDA parse) | Shared rule set (`Sdf` specs) |
+| `fix_reference_path` (report + rewrite) | USDA text | Shared readback |
+| `suggest_material_bind` (suggest) | USDA parse | Shared readback |
 | `snapshot_stage` | File copy | File copy |
 | `package_usdz` | `zipfile` | `UsdUtils.CreateNewUsdzPackage` |
 | Material binding (`UsdShade`) | — | Requires pxr |
@@ -117,8 +119,15 @@ when pxr is absent.
 the **root layer only** — prims composed in from references and sublayers are out
 of scope — so the two collectors stay equivalent and reference asset paths are
 always resolved against the root layer's directory. Each issue is
-`{code, severity, message, location}`; the registry is
+`{code, severity, message, location, suggested_fix, next_steps}`; the registry is
 `dcc_mcp_openusd.runtime.VALIDATION_RULES`.
+
+Issues point at the skill that can fix them: `UNRESOLVED_REFERENCE` suggests
+`openusd_stage__fix_reference_path`, and `UNBOUND_MATERIAL` /
+`DANGLING_MATERIAL_BINDING` suggest `openusd_material__suggest_material_bind`.
+Both fix skills run on the shared facts, so they agree with the validator on
+every runtime, and both read back what they write instead of claiming a fix
+that did not happen. Reporting needs no pxr; applying a material binding does.
 
 ## Run
 
@@ -140,9 +149,9 @@ The package ships seven bundled skills:
 | Skill | Purpose |
 | --- | --- |
 | `openusd-project` | Create self-contained project folders and snapshots. |
-| `openusd-stage` | Create stages, list prims, define xforms, set xform ops, modify stage metadata, and add references. |
+| `openusd-stage` | Create stages, list prims, define xforms, set xform ops, modify stage metadata, add references, and repair broken reference paths. |
 | `openusd-validate` | Validate stage invariants and package a USDZ-style archive. |
-| `openusd-material` | Create UsdShadeMaterial prims, attach UsdPreviewSurface shaders, and bind materials to geometry. |
+| `openusd-material` | Create UsdShadeMaterial prims, attach UsdPreviewSurface shaders, bind materials to geometry, and suggest missing bindings. |
 | `openusd-light-camera` | Create cameras (UsdGeomCamera) and lights (DistantLight, SphereLight) with transforms. |
 | `openusd-animation` | Set stage time codes and author translate/rotate/scale time samples. |
 | `openusd-composition` | Add sublayers, payloads, variant sets, and variant selections for multi-layer scenes. |
@@ -153,6 +162,7 @@ Agents should follow the normal DCC-MCP flow:
 2. `load_skill("openusd-stage")`
 3. Call a typed tool such as `openusd_stage__create_stage`
 4. Validate with `openusd_validate__validate_stage`
+5. Follow each issue's `suggested_fix` to repair the stage
 
 ## Scope
 
