@@ -187,6 +187,94 @@ def test_suggestions_are_identical_across_runtimes():
     assert pxr_result["suggestions"] == text_result["suggestions"]
 
 
+# ── a filter that misses must not be answered with another prim or material ─
+
+
+def _mixed_issue_stage(tmp_path) -> Path:
+    """A stage holding every material issue at once.
+
+    ``/World/Looks`` is a Scope, so it cannot carry a binding; ``/World/Prop``
+    has a dangling binding; ``PropPaint`` is defined but never bound. Any single
+    filter therefore leaves other issues behind, which is the case where a loop
+    that ignores the filter leaks suggestions about something else.
+    """
+    target = tmp_path / "scene.usda"
+    target.write_text(
+        '#usda 1.0\n(\n    defaultPrim = "World"\n)\n\n'
+        'def Xform "World"\n{\n'
+        '    def Scope "Looks"\n    {\n'
+        '        def Material "PropPaint"\n        {\n        }\n'
+        "    }\n"
+        '    def Mesh "Prop"\n    {\n        rel material:binding = </World/Looks/Missing>\n    }\n'
+        "}\n",
+        encoding="utf-8",
+    )
+    return target
+
+
+def test_prim_filter_must_not_be_answered_with_another_prim(runtime_mode, tmp_path):
+    """A prim that cannot carry a binding yields nothing, not a different prim."""
+    stage = _mixed_issue_stage(tmp_path)
+
+    result = suggest_material_bind(str(stage), prim_path="/World/Looks")
+
+    assert result["suggestions"] == [], "answering with another prim ignores the filter"
+
+
+def test_material_filter_must_not_be_answered_with_another_material(runtime_mode, tmp_path):
+    """A stale material_path yields nothing, not a suggestion about a live material."""
+    stage = _mixed_issue_stage(tmp_path)
+
+    result = suggest_material_bind(str(stage), material_path="/World/Materials/Ghost")
+
+    assert result["suggestions"] == [], "answering with another material ignores the filter"
+
+
+def test_unmatched_filter_warns_while_other_issues_exist(tmp_path):
+    """The warning is reachable in the common case: filter missed, stage still dirty."""
+    stage = _mixed_issue_stage(tmp_path)
+    import importlib.util
+
+    def load(relative):
+        spec = importlib.util.spec_from_file_location(
+            "smb", Path(__file__).parents[1] / "src" / "dcc_mcp_openusd" / "skills" / relative
+        )
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    tool = load("openusd-material/scripts/suggest_material_bind.py")
+
+    for filters in (
+        {"prim_path": "/World/Looks"},
+        {"material_path": "/World/Materials/Ghost"},
+    ):
+        result = tool.main(stage_file=str(stage), **filters)
+        assert result["success"] is True
+        assert result["context"]["warning"], "the unmatched filter must be flagged, not buried"
+        assert "/World/Looks" in result["context"]["warning"] or "Ghost" in result["context"]["warning"]
+
+
+def test_a_material_filter_that_matches_keeps_the_dangling_binding(runtime_mode, tmp_path):
+    """Naming a real material still returns the binding it could satisfy."""
+    stage = _mixed_issue_stage(tmp_path)
+
+    result = suggest_material_bind(str(stage), material_path="/World/Looks/PropPaint")
+
+    assert result["suggestions"], "PropPaint is a real candidate, so the binding is actionable"
+    assert {item["material_path"] for item in result["suggestions"]} == {"/World/Looks/PropPaint"}
+
+
+def test_a_bindable_prim_filter_still_narrows_the_suggestion(runtime_mode, tmp_path):
+    """Naming a bindable prim keeps the suggestion pointed at that prim."""
+    stage = _mixed_issue_stage(tmp_path)
+
+    result = suggest_material_bind(str(stage), prim_path="/World/Prop")
+
+    assert result["suggestions"]
+    assert {item["prim_path"] for item in result["suggestions"]} == {"/World/Prop"}
+
+
 # ── applying a binding ─────────────────────────────────────────────────────
 
 

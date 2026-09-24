@@ -1108,6 +1108,14 @@ def suggest_material_bind(
             if target_type == "Material":
                 continue
             candidates = _rank_by_name(materials, target)
+            if wanted_material:
+                # A caller that names a material only wants suggestions that
+                # material can satisfy. Without this the loop answers with some
+                # other material and the "filter matched nothing" warning can
+                # never fire while the stage has any other issue.
+                if wanted_material not in candidates:
+                    continue
+                candidates = [wanted_material] + [item for item in candidates if item != wanted_material]
             if target_type is None:
                 reason = "dangling_material_binding"
                 detail = "material:binding targets '%s' which does not exist" % target
@@ -1133,9 +1141,13 @@ def suggest_material_bind(
                 continue
             if material in bound_targets:
                 continue
-            if wanted_prim and wanted_prim in bindable_prims:
-                # The caller named the prim to fix, so bind the material to it
-                # rather than to some other prim the caller did not ask about.
+            if wanted_prim:
+                # The caller named the prim to fix. If that prim cannot carry a
+                # binding (a Scope, a Material, or a path that does not exist)
+                # there is nothing to suggest for it -- falling back to another
+                # prim would answer a question the caller did not ask.
+                if wanted_prim not in bindable_prims:
+                    continue
                 candidates = [wanted_prim]
             else:
                 open_prims = [candidate for candidate in bindable_prims if candidate not in bound_prims]
