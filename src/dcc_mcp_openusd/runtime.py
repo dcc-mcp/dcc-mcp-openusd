@@ -1118,14 +1118,23 @@ def _variant_block_spans(text: str) -> List[Tuple[int, int]]:
         if close_index == -1:
             continue
         spans.append((match.start(), close_index))
-        inner = text[open_index + 1 : close_index]
-        base = open_index + 1
-        for entry in _VARIANT_ENTRY_RE.finditer(inner):
-            entry_open = base + entry.end() - 1
+
+        # Claim only the variant entries directly inside this block. Scanning
+        # the whole body would also match the entries of any nested variantSet,
+        # which then get claimed a second time when that nested set is visited
+        # by _VARIANT_SET_RE, double-counting their brace level. Skipping past
+        # each entry's own closing brace leaves nested blocks to their own match.
+        index = open_index + 1
+        while index < close_index:
+            entry = _VARIANT_ENTRY_RE.search(text, index, close_index)
+            if entry is None:
+                break
+            entry_open = entry.end() - 1
             entry_close = _matching_delimiter(text, entry_open, "{", "}")
-            if entry_close == -1:
-                continue
-            spans.append((base + entry.start(), entry_close))
+            if entry_close == -1 or entry_close >= close_index:
+                break
+            spans.append((entry.start(), entry_close))
+            index = entry_close + 1
     return spans
 
 
@@ -1152,14 +1161,27 @@ def _parse_usda_blocks(text: str) -> List[Dict[str, Any]]:
     references or bindings to its parent.
     """
     stripped = _strip_usda_comments(text)
+    # Braces inside quoted strings and @asset@ paths are not nesting, so they
+    # are skipped with the same token scanner _matching_delimiter() uses.
+    # Positions are still recorded for skipped characters so that depth_at
+    # stays index-aligned with the text.
     depth_at: List[int] = []
     depth = 0
-    for char in stripped:
+    index = 0
+    length = len(stripped)
+    while index < length:
+        char = stripped[index]
+        if char == '"' or char == "'" or char == "@":
+            skip_to = _skip_usda_token(stripped, index)
+            depth_at.extend([depth] * (skip_to - index))
+            index = skip_to
+            continue
         if char == "{":
             depth += 1
         elif char == "}":
             depth = max(0, depth - 1)
         depth_at.append(depth)
+        index += 1
     # variantSet blocks and their per-variant blocks are composition
     # scaffolding, not prim nesting, so their braces must not shift a prim's
     # inferred path. Without this the second and later variants of a prim are

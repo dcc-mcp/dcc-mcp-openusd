@@ -39,6 +39,7 @@ SUBLAYER_OFFSET = DATA_DIR / "sublayer_offset.usda"
 UNIT_MISMATCH = DATA_DIR / "unit_mismatch.usda"
 UNBOUND_MATERIAL = DATA_DIR / "unbound_material.usda"
 VARIANT_MATERIAL = DATA_DIR / "variant_material.usda"
+VARIANT_NESTED = DATA_DIR / "variant_nested.usda"
 VARIANT_MULTI = DATA_DIR / "variant_multi.usda"
 VARIANT_SHARED_NAME = DATA_DIR / "variant_shared_name.usda"
 
@@ -54,6 +55,7 @@ SAMPLES = (
     UNIT_MISMATCH,
     UNBOUND_MATERIAL,
     VARIANT_MATERIAL,
+    VARIANT_NESTED,
     VARIANT_MULTI,
     VARIANT_SHARED_NAME,
 )
@@ -666,6 +668,53 @@ def test_multiple_variants_flatten_to_the_same_level(runtime_mode):
     # Both materials are reported at the flat path they compose to.
     unbound = {issue["location"] for issue in result["issues"] if issue["code"] == "UNBOUND_MATERIAL"}
     assert unbound == {"/Root/Looks/RedMat"}
+
+
+def test_nested_variant_sets_are_counted_once(runtime_mode):
+    """A variantSet nested inside another must not be double-counted.
+
+    Scanning a variantSet's whole body also matches the entries of any nested
+    set, which then get claimed again when the nested set is visited — so the
+    discount over-subtracts and prims land one level too high, making a valid
+    binding look dangling (an error that flips ``valid``).
+    """
+    result = validate_stage(str(VARIANT_NESTED))
+
+    assert "DANGLING_MATERIAL_BINDING" not in codes(result)
+    assert result["valid"] is True
+
+
+def test_variant_spans_are_not_double_counted():
+    """Each variantSet and variant block contributes exactly one span."""
+    from dcc_mcp_openusd.runtime import _variant_block_spans
+
+    text = VARIANT_NESTED.read_text(encoding="utf-8")
+    spans = _variant_block_spans(text)
+
+    assert len(spans) == len(set(spans)), f"duplicate spans: {spans}"
+    # One span each for the two variantSet blocks and the two variant entries.
+    assert len(spans) == 4
+    assert sum(1 for start, _ in spans if text.startswith("variantSet", start)) == 2
+
+
+def test_braces_inside_strings_do_not_shift_prim_nesting():
+    """A brace inside a quoted value must not be read as nesting.
+
+    The depth array has to skip quoted strings and @asset@ paths the same way
+    _matching_delimiter() does, otherwise a brace in a customData value
+    de-balances the nesting level of every prim authored after it.
+    """
+    from dcc_mcp_openusd.runtime import _parse_usda_blocks
+
+    text = (
+        '#usda 1.0\n(\n    defaultPrim = "World"\n)\n\n'
+        'def Xform "World"\n{\n'
+        '    def Mesh "Body" (\n        customData = { string note = "}" }\n    )\n    {\n    }\n\n'
+        '    def Mesh "Other"\n    {\n    }\n'
+        "}\n"
+    )
+    paths = [block["path"] for block in _parse_usda_blocks(text)]
+    assert paths == ["/World", "/World/Body", "/World/Other"]
 
 
 def test_prim_types_are_flat_under_multiple_variants():

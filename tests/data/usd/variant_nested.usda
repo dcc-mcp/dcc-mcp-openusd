@@ -1,0 +1,39 @@
+#usda 1.0
+(
+    defaultPrim = "R"
+    metersPerUnit = 1
+    upAxis = "Y"
+)
+
+def Xform "R"
+{
+    def Mesh "Cube"
+    {
+        rel material:binding = </R/I/Nested/DeepMat>
+    }
+
+    def Scope "I"
+    {
+        variantSet "style" = {
+            "a" {
+                def Scope "Nested"
+                {
+                    variantSet "tint" = {
+                        "x" {
+                            def Material "DeepMat"
+                            {
+                                token outputs:surface.connect = </R/I/Nested/DeepMat/Shader.outputs:surface>
+
+                                def Shader "Shader"
+                                {
+                                    uniform token info:id = "UsdPreviewSurface"
+                                    token outputs:surface
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
