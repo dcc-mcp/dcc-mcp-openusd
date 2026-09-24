@@ -100,7 +100,9 @@ Every public function returns a `"runtime"` field in its result dict —
 | `create_stage`, `create_project` | USDA text | Native `Usd.Stage` |
 | `list_stage`, `define_xform`, `define_prim` | USDA parse + insert | Native API |
 | `add_reference`, `set_xform_ops` | USDA text | Native API |
-| `validate_stage`, `snapshot_stage`, `package_usdz` | USDA checks | Native validation |
+| `validate_stage` | Shared rule set (USDA parse) | Shared rule set (`Sdf` specs) |
+| `snapshot_stage` | File copy | File copy |
+| `package_usdz` | `zipfile` | `UsdUtils.CreateNewUsdzPackage` |
 | Material binding (`UsdShade`) | — | Requires pxr |
 | Camera / Light (`UsdGeomCamera`, `UsdLux`) | — | Requires pxr |
 | Time-sampled animation | — | Requires pxr |
@@ -109,6 +111,14 @@ Every public function returns a `"runtime"` field in its result dict —
 Advanced features that cannot be expressed through text-fallback raise
 `OpenUsdError("... requires the Pixar USD (pxr) package. Install it with: pip install usd-core")`
 when pxr is absent.
+
+`validate_stage` is the exception: it runs the **same rule set** on both runtimes.
+`pxr` is used only to parse the file (`Sdf.Layer`); both runtimes report facts for
+the **root layer only** — prims composed in from references and sublayers are out
+of scope — so the two collectors stay equivalent and reference asset paths are
+always resolved against the root layer's directory. Each issue is
+`{code, severity, message, location}`; the registry is
+`dcc_mcp_openusd.runtime.VALIDATION_RULES`.
 
 ## Run
 

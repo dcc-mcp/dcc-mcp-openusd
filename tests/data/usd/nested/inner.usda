@@ -1,0 +1,15 @@
+#usda 1.0
+(
+    defaultPrim = "Inner"
+    metersPerUnit = 1
+    upAxis = "Y"
+)
+
+def Xform "Inner"
+{
+    def Xform "Prop" (
+        prepend references = @./prop.usda@
+    )
+    {
+    }
+}
