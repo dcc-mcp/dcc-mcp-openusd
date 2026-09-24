@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 
 from dcc_mcp_openusd.runtime import RuntimeInfo, detect_runtime, suggest_material_bind, validate_stage
-from tests.test_fix_reference_path import _binary_stage, _headerless_stage
+from tests.conftest import binary_stage, headerless_stage  # noqa: F401  (shared stage builders)
 
 REAL_HAS_PXR = detect_runtime().has_pxr
 
@@ -329,7 +329,7 @@ def test_apply_writes_a_binding_that_validate_stage_accepts(stage):
 def test_binary_layer_without_pxr_yields_no_false_clean_suggestions(tmp_path, monkeypatch):
     """A binary layer the collector cannot read must not read as 'nothing to bind'."""
     monkeypatch.setattr("dcc_mcp_openusd.runtime._RUNTIME_INFO", RuntimeInfo(has_pxr=False))
-    stage = _binary_stage(tmp_path)
+    stage = binary_stage(tmp_path)
 
     result = suggest_material_bind(str(stage))
 
@@ -340,9 +340,20 @@ def test_binary_layer_without_pxr_yields_no_false_clean_suggestions(tmp_path, mo
 
 def test_a_file_that_is_not_a_usd_layer_yields_no_false_clean_suggestions(runtime_mode, tmp_path):
     """A headerless text file must not be reported as having no binding issues."""
-    stage = _headerless_stage(tmp_path)
+    stage = headerless_stage(tmp_path)
 
     result = suggest_material_bind(str(stage))
 
     assert result["suggestions"] == []
     assert result["failed"]
+
+
+def test_binary_layer_with_a_partial_pxr_install_yields_no_clean_suggestions(partial_pxr, tmp_path):
+    """The same refusal for the material skill."""
+    stage = binary_stage(tmp_path)
+
+    result = suggest_material_bind(str(stage))
+
+    assert result["suggestions"] == []
+    assert result["failed"], "an unread binary layer is not a stage with no binding issues"
+    assert "binary" in result["failed"][0]["detail"]

@@ -466,6 +466,10 @@ class _StageFacts:
     header_ok: bool = False
     binary_layer: bool = False
     open_error: Optional[str] = None
+    #: True once a collector has actually filled these facts. The initial facts
+    #: built from layer metadata alone are *not* collected, and every list on
+    #: them is empty -- indistinguishable from a stage with nothing in it.
+    collected: bool = False
     prim_types: Dict[str, str] = field(default_factory=dict)
     untyped_prims: Set[str] = field(default_factory=set)
     materials: Dict[str, bool] = field(default_factory=dict)
@@ -580,6 +584,7 @@ def _collect_facts_pxr(path: Path, chain: List[Dict[str, Any]]) -> _StageFacts:
             for target in targets.GetAppliedItems():
                 facts.bindings.append((prim_path, _strip_property_suffix(str(target))))
 
+    facts.collected = True
     return facts
 
 
@@ -667,6 +672,7 @@ def _collect_facts_text(path: Path, chain: List[Dict[str, Any]]) -> _StageFacts:
     facts.binary_layer = bool(chain and chain[0].get("binary"))
     if facts.binary_layer:
         return facts
+    facts.collected = True
 
     text = path.read_text(encoding="utf-8", errors="replace")
     blocks = _parse_usda_blocks(text)
@@ -937,8 +943,11 @@ def _uninspectable_detail(facts: _StageFacts) -> Optional[str]:
     """
     if facts.open_error:
         return "Stage could not be opened: %s" % facts.open_error
-    if facts.binary_layer and not detect_runtime().has_pxr:
-        return "Layer is binary; inspecting it requires the pxr runtime"
+    if facts.binary_layer and not facts.collected:
+        # Whether the binary layer was read is a fact, not a capability probe:
+        # a partial pxr install can report has_pxr while the collector's own
+        # Sdf import fails, which leaves these facts unfilled.
+        return "Layer is binary; inspecting it requires a working pxr runtime"
     if not facts.binary_layer and not facts.header_ok:
         return "Layer is not a text USD layer; it does not start with a #usda header"
     return None

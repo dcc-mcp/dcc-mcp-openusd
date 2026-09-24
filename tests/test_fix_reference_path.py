@@ -21,6 +21,7 @@ from dcc_mcp_openusd.runtime import (
     fix_reference_path,
     validate_stage,
 )
+from tests.conftest import binary_stage, headerless_stage  # noqa: F401  (shared stage builders)
 
 REAL_HAS_PXR = detect_runtime().has_pxr
 
@@ -32,27 +33,6 @@ BROKEN_ASSET = "./assets/missing_set_piece.usda"
 ASSET_TEMPLATE = (
     '#usda 1.0\n(\n    defaultPrim = "Prop"\n    metersPerUnit = 1\n    upAxis = "Y"\n)\n\ndef Mesh "Prop"\n{\n}\n'
 )
-
-
-# ── a stage that cannot be inspected is never reported as clean ─────────────
-
-#: A .usdc-style binary layer. The collector keys off this magic, so the file
-#: needs no real payload to exercise the "cannot be inspected" path.
-BINARY_MAGIC = b"PXR-USDC"
-
-
-def _binary_stage(tmp_path, name="scene.usdc") -> Path:
-    """A binary USD layer that only pxr could read."""
-    target = tmp_path / name
-    target.write_bytes(BINARY_MAGIC + bytes(64))
-    return target
-
-
-def _headerless_stage(tmp_path, name="scene.usda") -> Path:
-    """A text file that is not a USD layer at all."""
-    target = tmp_path / name
-    target.write_text('def Xform "World"\n{\n}\n', encoding="utf-8")
-    return target
 
 
 @pytest.fixture(params=["pxr", "text-fallback"])
@@ -414,7 +394,7 @@ def test_commented_out_reference_is_not_rewritten(runtime_mode, tmp_path, librar
 def test_binary_layer_without_pxr_is_not_reported_clean(tmp_path, monkeypatch):
     """A binary layer the collector cannot read must not look like a clean stage."""
     monkeypatch.setattr("dcc_mcp_openusd.runtime._RUNTIME_INFO", RuntimeInfo(has_pxr=False))
-    stage = _binary_stage(tmp_path)
+    stage = binary_stage(tmp_path)
 
     result = fix_reference_path(str(stage))
 
@@ -426,7 +406,7 @@ def test_binary_layer_without_pxr_is_not_reported_clean(tmp_path, monkeypatch):
 def test_binary_layer_is_still_rejected_when_apply_is_requested(tmp_path, monkeypatch):
     """The same refusal holds for apply=true, not just a dry run."""
     monkeypatch.setattr("dcc_mcp_openusd.runtime._RUNTIME_INFO", RuntimeInfo(has_pxr=False))
-    stage = _binary_stage(tmp_path)
+    stage = binary_stage(tmp_path)
 
     result = fix_reference_path(str(stage), apply=True)
 
@@ -436,9 +416,25 @@ def test_binary_layer_is_still_rejected_when_apply_is_requested(tmp_path, monkey
 
 def test_a_file_that_is_not_a_usd_layer_is_not_reported_clean(runtime_mode, tmp_path):
     """A text file with no #usda header yields no facts; that is not a clean stage."""
-    stage = _headerless_stage(tmp_path)
+    stage = headerless_stage(tmp_path)
 
     result = fix_reference_path(str(stage))
 
     assert result["applied"] is False
     assert result["failed"], "an unparseable file must not be reported as having no broken references"
+
+
+def test_binary_layer_with_a_partial_pxr_install_is_not_clean(partial_pxr, tmp_path):
+    """pxr reports usable but the collector never ran: the layer was not inspected.
+
+    detect_runtime() only imports pxr.Usd, while the collector needs pxr.Sdf. A
+    broken install therefore reports has_pxr=True and still leaves the facts
+    empty, which must not be read as a stage with nothing wrong with it.
+    """
+    stage = binary_stage(tmp_path)
+
+    result = fix_reference_path(str(stage))
+
+    assert result["applied"] is False
+    assert result["failed"], "an unread binary layer is neither clean nor fixed"
+    assert "binary" in result["failed"][0]["detail"]
