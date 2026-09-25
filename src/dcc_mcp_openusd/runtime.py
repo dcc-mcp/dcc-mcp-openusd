@@ -18,6 +18,15 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set, Tuple
 
+from dcc_mcp_openusd.validation import (
+    ValidationIssue,
+    ValidationLocation,
+    ValidationResult,
+    layer_location,
+    line_location,
+    prim_location,
+)
+
 if TYPE_CHECKING:
     from dcc_mcp_core.asset_import import AssetDescriptor, ImportToSceneRequest, ImportToSceneResult
 
@@ -490,21 +499,31 @@ def validate_stage(stage_file: str, strict: bool = False) -> Dict[str, Any]:
     and every rule itself run through the same code, so a stage is judged by the
     same rules whether or not ``pxr`` is installed.
 
-    Every issue carries ``severity``, ``message``, plus a stable ``code`` from
-    :data:`VALIDATION_RULES` and a ``location`` (prim path or ``[...]`` layer
-    marker).
+    Every issue follows the frozen :class:`~dcc_mcp_openusd.validation.ValidationIssue`
+    schema: a stable ``code`` from :data:`VALIDATION_RULES`, a ``severity``, a
+    discriminated ``location`` object and a never-empty ``next_steps`` list.
+    The payload is a :class:`~dcc_mcp_openusd.validation.ValidationResult`,
+    so it carries a per-severity ``summary`` and an aggregated top-level
+    ``next_steps``.
+
+    ``valid`` and ``issue_count`` are deprecated aliases kept for one migration
+    window; prefer ``success`` and ``summary["total"]``.
     """
     path = _existing_file(stage_file)
     facts, runtime = _collect_stage_facts(path)
     issues = _run_validators(facts, strict)
-    return {
-        "stage_file": str(path),
-        "valid": not any(issue["severity"] == "error" for issue in issues),
-        "issue_count": len(issues),
-        "issues": issues,
-        "runtime": runtime,
-        "rules": sorted(VALIDATION_RULES),
-    }
+    result = ValidationResult.from_issues(
+        str(path),
+        issues,
+        extra={
+            "runtime": runtime,
+            "rules": sorted(VALIDATION_RULES),
+        },
+    )
+    payload = result.to_dict()
+    payload["valid"] = result.success  # deprecated alias of ``success``
+    payload["issue_count"] = result.summary["total"]  # deprecated alias of ``summary.total``
+    return payload
 
 
 def _collect_stage_facts(path: Path) -> Tuple[_StageFacts, str]:
@@ -714,41 +733,58 @@ def _is_material_binding_name(name: str) -> bool:
     return name.startswith("material:binding:") and not name.startswith("material:binding:collection")
 
 
+def _next_steps_for(
+    code: str, stage_file: str = "", **fix_args: Optional[str]
+) -> Tuple[Optional[Dict[str, Any]], List[Dict[str, Any]]]:
+    """Return ``(suggested_fix, next_steps)`` for one rule code.
+
+    The ``suggested_fix`` shape is ``{"skill": ..., "args": {...}}``, or
+    ``None`` when no fix skill covers the rule. ``next_steps`` is never empty
+    for a registered rule: rules without a fix skill fall back to a
+    ``manual_fix`` entry carrying the written guidance, so an agent always has
+    a next move.
+    """
+    skill = _FIX_SKILL_BY_CODE.get(code)
+    if skill and stage_file:
+        args: Dict[str, Any] = {"stage_file": stage_file}
+        args.update({key: value for key, value in fix_args.items() if value})
+        return {"skill": skill, "args": args}, [{"action": skill, "args": dict(args)}]
+    guidance = _GUIDANCE_BY_CODE.get(code)
+    if not guidance:
+        return None, []
+    return None, [{"action": "manual_fix", "detail": guidance}]
+
+
 def _run_validators(facts: _StageFacts, strict: bool) -> List[Dict[str, Any]]:
-    """Apply the shared rule set to collected stage facts."""
+    """Apply the shared rule set to collected stage facts.
+
+    Returns :class:`~dcc_mcp_openusd.validation.ValidationIssue` payloads. Each
+    issue is built through the schema class so the severity, the discriminated
+    ``location`` and the non-empty ``next_steps`` guarantee are enforced on
+    every rule at once instead of re-checked per rule.
+    """
     issues: List[Dict[str, Any]] = []
     stage_file = str(facts.stage_path) if facts.stage_path else ""
 
-    def next_steps_for(code: str, **fix_args: Optional[str]) -> Tuple[Optional[Dict[str, Any]], List[Dict[str, Any]]]:
-        """Return ``(suggested_fix, next_steps)`` for one issue.
-
-        The ``suggested_fix`` shape is deliberately minimal
-        (``{"skill": ..., "args": {...}}``) because the final
-        ``ValidationIssue`` schema is owned by a separate change and will
-        replace it in one pass. Rules with no fix skill still get a
-        ``next_steps`` entry so the caller is never left without guidance.
-        """
-        skill = _FIX_SKILL_BY_CODE.get(code)
-        if skill and stage_file:
-            args: Dict[str, Any] = {"stage_file": stage_file}
-            args.update({key: value for key, value in fix_args.items() if value})
-            return {"skill": skill, "args": args}, [{"action": skill, "args": dict(args)}]
-        guidance = _GUIDANCE_BY_CODE.get(code)
-        if not guidance:
-            return None, []
-        return None, [{"action": "manual_fix", "detail": guidance}]
-
-    def add(code: str, message: str, location: str = "/", **fix_args: Optional[str]) -> None:
-        suggested_fix, next_steps = next_steps_for(code, **fix_args)
+    def add(
+        code: str,
+        message: str,
+        location: Optional[ValidationLocation] = None,
+        **fix_args: Optional[str],
+    ) -> None:
+        base_severity = _RULE_SEVERITY[code]
+        strict_promoted = bool(strict and code in _STRICT_ERROR_RULES and base_severity != "error")
+        suggested_fix, next_steps = _next_steps_for(code, stage_file, **fix_args)
         issues.append(
-            {
-                "code": code,
-                "severity": "error" if strict and code in _STRICT_ERROR_RULES else _RULE_SEVERITY[code],
-                "message": message,
-                "location": location,
-                "suggested_fix": suggested_fix,
-                "next_steps": next_steps,
-            }
+            ValidationIssue(
+                code=code,
+                severity="error" if strict_promoted else base_severity,
+                message=message,
+                location=location if location is not None else prim_location("/"),
+                strict_promoted=strict_promoted,
+                suggested_fix=suggested_fix,
+                next_steps=next_steps,
+            ).to_dict()
         )
 
     chain = facts.layer_chain
@@ -756,57 +792,60 @@ def _run_validators(facts: _StageFacts, strict: bool) -> List[Dict[str, Any]]:
     stage_name = Path(root_meta.get("file") or "stage").name
 
     # ── layer integrity ────────────────────────────────────────────────────
+    stage_layer = layer_location(stage_name)
+
     if facts.open_error:
-        add("STAGE_OPEN_FAILED", f"Stage could not be opened: {facts.open_error}", f"[{stage_name}]")
+        add("STAGE_OPEN_FAILED", f"Stage could not be opened: {facts.open_error}", stage_layer)
     if facts.binary_layer:
         add(
             "BINARY_LAYER_REQUIRES_PXR",
             "Binary USD layer cannot be validated without the pxr package",
-            f"[{stage_name}]",
+            stage_layer,
         )
     elif not facts.header_ok:
-        add("INVALID_STAGE_HEADER", "Stage does not start with a #usda header", "[line 1]")
+        add("INVALID_STAGE_HEADER", "Stage does not start with a #usda header", line_location(1))
 
     # ── defaultPrim ────────────────────────────────────────────────────────
     default_prim = root_meta.get("default_prim")
     if not default_prim:
-        add("MISSING_DEFAULT_PRIM", "Stage has no defaultPrim metadata", f"[{stage_name}]")
+        add("MISSING_DEFAULT_PRIM", "Stage has no defaultPrim metadata", stage_layer)
     else:
         target = default_prim if str(default_prim).startswith("/") else "/" + str(default_prim)
         if target not in facts.prim_types:
             add(
                 "INVALID_DEFAULT_PRIM",
                 f"Stage defaultPrim '{default_prim}' does not resolve to an existing prim",
-                target,
+                prim_location(target),
             )
 
     # ── units and up axis ──────────────────────────────────────────────────
     up_axis = root_meta.get("up_axis")
     if not up_axis:
-        add("MISSING_UP_AXIS", "Stage has no upAxis metadata", f"[{stage_name}]")
+        add("MISSING_UP_AXIS", "Stage has no upAxis metadata", stage_layer)
     elif str(up_axis).upper() not in _VALID_AXES:
-        add("INVALID_UP_AXIS", f"Stage upAxis '{up_axis}' is not one of X, Y, Z", f"[{stage_name}]")
+        add("INVALID_UP_AXIS", f"Stage upAxis '{up_axis}' is not one of X, Y, Z", stage_layer)
 
     meters_per_unit = root_meta.get("meters_per_unit")
     if meters_per_unit is None:
-        add("MISSING_METERS_PER_UNIT", "Stage has no metersPerUnit metadata", f"[{stage_name}]")
+        add("MISSING_METERS_PER_UNIT", "Stage has no metersPerUnit metadata", stage_layer)
     elif not isinstance(meters_per_unit, float) or not meters_per_unit > 0 or not math.isfinite(meters_per_unit):
         add(
             "INVALID_METERS_PER_UNIT",
             f"Stage metersPerUnit must be a positive number, got {meters_per_unit!r}",
-            f"[{stage_name}]",
+            stage_layer,
         )
 
     for entry in chain[1:]:
         if not entry.get("available"):
             continue
         layer_name = Path(entry["file"]).name
+        sub_layer = layer_location(layer_name)
         sub_axis = entry.get("up_axis")
         if sub_axis and up_axis and str(sub_axis).upper() != str(up_axis).upper():
             add(
                 "UP_AXIS_MISMATCH",
                 f"Sublayer upAxis '{sub_axis}' does not match root layer upAxis '{up_axis}'",
-                f"[{layer_name}]",
+                sub_layer,
             )
         sub_meters = entry.get("meters_per_unit")
         if (
@@ -817,7 +856,7 @@ def _run_validators(facts: _StageFacts, strict: bool) -> List[Dict[str, Any]]:
             add(
                 "METERS_PER_UNIT_MISMATCH",
                 f"Sublayer metersPerUnit {sub_meters:g} does not match root layer metersPerUnit {meters_per_unit:g}",
-                f"[{layer_name}]",
+                sub_layer,
             )
 
     # ── composition: references ────────────────────────────────────────────
@@ -829,14 +868,14 @@ def _run_validators(facts: _StageFacts, strict: bool) -> List[Dict[str, Any]]:
             add(
                 "UNRESOLVED_REFERENCE",
                 f"Reference '{asset}' cannot be resolved on disk",
-                prim_path,
+                prim_location(prim_path),
                 prim_path=prim_path,
             )
 
     if facts.stage_path is not None:
         cycle = _detect_reference_cycle(facts.stage_path)
         if cycle:
-            add("REFERENCE_CYCLE", f"Reference chain loops back to {cycle}", f"[{cycle}]")
+            add("REFERENCE_CYCLE", f"Reference chain loops back to {cycle}", layer_location(cycle))
 
     # ── materials ──────────────────────────────────────────────────────────
     bound_targets = {target for _, target in facts.bindings}
@@ -846,14 +885,14 @@ def _run_validators(facts: _StageFacts, strict: bool) -> List[Dict[str, Any]]:
             add(
                 "DANGLING_MATERIAL_BINDING",
                 f"material:binding targets '{target}' which does not exist",
-                prim_path,
+                prim_location(prim_path),
                 prim_path=prim_path,
             )
         elif target_type != "Material":
             add(
                 "DANGLING_MATERIAL_BINDING",
                 f"material:binding targets '{target}' which is a '{target_type or 'typeless'}' prim, not a Material",
-                prim_path,
+                prim_location(prim_path),
                 prim_path=prim_path,
             )
 
@@ -862,21 +901,21 @@ def _run_validators(facts: _StageFacts, strict: bool) -> List[Dict[str, Any]]:
             add(
                 "INCOMPLETE_MATERIAL",
                 f"Material '{material_path}' has no connected surface output or shader",
-                material_path,
+                prim_location(material_path),
             )
         if material_path not in bound_targets:
             add(
                 "UNBOUND_MATERIAL",
                 f"Material '{material_path}' is not bound to any prim",
-                material_path,
+                prim_location(material_path),
                 material_path=material_path,
             )
 
     # ── hierarchy ──────────────────────────────────────────────────────────
     if not facts.prim_types:
-        add("NO_TRAVERSABLE_PRIMS", "Stage has no traversable prims", "/")
+        add("NO_TRAVERSABLE_PRIMS", "Stage has no traversable prims", prim_location("/"))
     for prim_path in sorted(facts.untyped_prims):
-        add("UNDEFINED_PRIM_TYPE", f"Prim '{prim_path}' is defined without a type name", prim_path)
+        add("UNDEFINED_PRIM_TYPE", f"Prim '{prim_path}' is defined without a type name", prim_location(prim_path))
 
     return issues
 

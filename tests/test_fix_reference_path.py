@@ -83,7 +83,9 @@ def test_discovery_agrees_with_validate_stage(runtime_mode, stage):
     """The fix skill and the validator judge the same references."""
     unresolved = {entry["prim_path"] for entry in find_unresolved_references(str(stage))["unresolved"]}
     reported = {
-        issue["location"] for issue in validate_stage(str(stage))["issues"] if issue["code"] == "UNRESOLVED_REFERENCE"
+        issue["location"]["path"]
+        for issue in validate_stage(str(stage))["issues"]
+        if issue["code"] == "UNRESOLVED_REFERENCE"
     }
     assert unresolved == reported
 
