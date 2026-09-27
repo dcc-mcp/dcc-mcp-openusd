@@ -75,6 +75,12 @@ For full OpenUSD runtime behavior, install the optional Pixar USD bindings:
 python -m pip install --only-binary=:all: "dcc-mcp-openusd[openusd]"
 ```
 
+Timeline interop (`openusd-timeline`) additionally needs OpenTimelineIO:
+
+```bash
+python -m pip install "dcc-mcp-openusd[timeline]"
+```
+
 The `[openusd]` extra pulls in `usd-core>=24.11` (the Pixar open-source USD
 Python bindings, importable as `pxr`). With pxr installed, all stage
 authoring, material binding, camera/light definition, time-sampled animation,
@@ -109,6 +115,7 @@ Every public function returns a `"runtime"` field in its result dict —
 | Camera / Light (`UsdGeomCamera`, `UsdLux`) | — | Requires pxr |
 | Time-sampled animation | — | Requires pxr |
 | Sublayer / payload composition | — | Requires pxr |
+| OTIO timeline import / export / parity | — | Requires pxr + `opentimelineio` |
 
 Advanced features that cannot be expressed through text-fallback raise
 `OpenUsdError("... requires the Pixar USD (pxr) package. Install it with: pip install usd-core")`
@@ -157,7 +164,7 @@ verify never start the service or daemon.
 
 ## Bundled Skills
 
-The package ships seven bundled skills:
+The package ships eight bundled skills:
 
 | Skill | Purpose |
 | --- | --- |
@@ -168,6 +175,7 @@ The package ships seven bundled skills:
 | `openusd-light-camera` | Create cameras (UsdGeomCamera) and lights (DistantLight, SphereLight) with transforms. |
 | `openusd-animation` | Set stage time codes and author translate/rotate/scale time samples. |
 | `openusd-composition` | Add sublayers, payloads, variant sets, and variant selections for multi-layer scenes. |
+| `openusd-timeline` | Import an OpenTimelineIO timeline into the stage time axis, export a stage back to OTIO, and assert round-trip parity. |
 
 Agents should follow the normal DCC-MCP flow:
 
@@ -192,7 +200,7 @@ and packaging workflows.
 pip install -e ".[dev]"
 pytest tests/ --ignore=tests/e2e
 
-# Full setup (pxr runtime, material/light/animation/composition tests)
+# Full setup (pxr runtime, material/light/animation/composition/timeline tests)
 pip install -e ".[dev,openusd]"
 pytest tests/e2e/ -v
 ruff check src tests tools
