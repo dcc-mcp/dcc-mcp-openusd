@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.9.0](https://github.com/dcc-mcp/dcc-mcp-openusd/compare/v0.8.2...v0.9.0) (2026-09-25)
+
+
+### Features
+
+* add fix skills and wire validate_stage issues to them ([#53](https://github.com/dcc-mcp/dcc-mcp-openusd/issues/53)) ([0deb85c](https://github.com/dcc-mcp/dcc-mcp-openusd/commit/0deb85c9d49d99daf8dd7b78097bcd300dbf899f))
+* add structured ValidationIssue and ValidationResult schema ([5fee276](https://github.com/dcc-mcp/dcc-mcp-openusd/commit/5fee276350f7db732514d462392ef5f21713bca0))
+* expand validate_stage to a shared rule set of 18 validators ([#51](https://github.com/dcc-mcp/dcc-mcp-openusd/issues/51)) ([679e288](https://github.com/dcc-mcp/dcc-mcp-openusd/commit/679e288fa94daa05cd60731609a57ea81bc731e5))
+
 ## [0.8.2](https://github.com/dcc-mcp/dcc-mcp-openusd/compare/v0.8.1...v0.8.2) (2026-07-19)
 
 
