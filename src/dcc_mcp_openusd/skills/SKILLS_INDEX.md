@@ -9,6 +9,7 @@ Bundled OpenUSD skills are intentionally small and progressive:
 - `openusd-light-camera`: camera (UsdGeomCamera) and light (DistantLight, SphereLight) creation with transforms.
 - `openusd-animation`: stage time codes and translate/rotate/scale time samples.
 - `openusd-composition`: sublayers, payloads, variant sets, and variant selections for multi-layer scenes.
+- `openusd-timeline`: OpenTimelineIO interop — import an OTIO timeline into the stage time axis, export it back, and assert round-trip parity (`opentimelineio` required).
 
 Load only the skill needed for the current task, then follow the declared
 `next-tools` hints.

@@ -13,9 +13,11 @@ from dcc_mcp_core import __version__ as core_version
 
 from dcc_mcp_openusd.__version__ import __version__
 from dcc_mcp_openusd.runtime import create_stage, detect_runtime, list_stage
+from dcc_mcp_openusd.timeline import detect_otio
 
 MIN_CORE_VERSION = "0.19.45"
 MIN_PXR_VERSION = "24.11"
+MIN_OTIO_VERSION = "0.15"
 
 
 def _distribution_version(name: str) -> str | None:
@@ -96,9 +98,17 @@ def _fail(
 def evaluate(operation: str, config: dict[str, Any]) -> dict[str, Any]:
     """Evaluate the installed runtime without starting the standalone service."""
     detected = detect_runtime()
+    otio_runtime = detect_otio()
+    otio_version = _distribution_version("opentimelineio") if otio_runtime.has_otio else None
     mode = "pxr" if detected.has_pxr else "text-fallback"
     distribution_version = _distribution_version("usd-core") if detected.has_pxr else None
     full_capabilities = detected.has_pxr and _version_at_least(distribution_version, MIN_PXR_VERSION)
+    # Timeline interop needs both runtimes: pxr writes the stage, OTIO the edit.
+    timeline_interop = (
+        full_capabilities
+        and otio_runtime.has_otio
+        and _version_at_least(otio_version or otio_runtime.version, MIN_OTIO_VERSION)
+    )
     capabilities = {
         "text_usda_authoring": True,
         "stage_inspection": True,
@@ -108,6 +118,7 @@ def evaluate(operation: str, config: dict[str, Any]) -> dict[str, Any]:
         "camera_and_lights": full_capabilities,
         "time_sampled_animation": full_capabilities,
         "layer_composition": full_capabilities,
+        "timeline_interop": timeline_interop,
     }
     report = {
         "schema_version": "1.0",
@@ -126,6 +137,8 @@ def evaluate(operation: str, config: dict[str, Any]) -> dict[str, Any]:
             "min_core_version": MIN_CORE_VERSION,
             "min_pxr_version": MIN_PXR_VERSION,
             "pxr_required_for_full_capabilities": True,
+            "otio_version": otio_version,
+            "min_otio_version": MIN_OTIO_VERSION,
         },
         "runtime": {
             "mode": mode,

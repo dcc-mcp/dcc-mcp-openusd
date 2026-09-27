@@ -1720,9 +1720,16 @@ def _insert_after_opening_brace(text: str, parent_path: str, block: str) -> str:
 
 
 def _parse_prims_from_usda(text: str) -> List[Dict[str, Any]]:
-    """Parse prim definitions from USDA text, tracking nesting for correct paths."""
+    """Parse prim definitions from USDA text, tracking nesting for correct paths.
+
+    Braces inside a prim's ``( ... )`` metadata block -- dictionaries such as
+    ``customData = { ... }`` or ``assetInfo = { ... }`` -- are not prim nesting,
+    so they are ignored: counting them pops the path stack before the prim's own
+    body opens and flattens every following prim to the root.
+    """
     prims: List[Dict[str, Any]] = []
     path_stack: List[str] = []
+    paren_depth = 0
 
     for line in text.splitlines():
         stripped = line.strip()
@@ -1737,11 +1744,22 @@ def _parse_prims_from_usda(text: str) -> List[Dict[str, Any]]:
             full_path = "/" + "/".join(path_stack)
             prims.append({"path": full_path, "type": match.group(2), "active": True})
 
-        # Track closing braces to pop the stack
-        closes = stripped.count("}")
-        for _ in range(closes):
-            if path_stack:
-                path_stack.pop()
+        # Track closing braces to pop the stack, skipping quoted strings and
+        # asset paths so braces inside their text are not read as nesting.
+        index = 0
+        while index < len(stripped):
+            char = stripped[index]
+            if char == '"' or char == "'" or char == "@":
+                index = _skip_usda_token(stripped, index)
+                continue
+            if char == "(":
+                paren_depth += 1
+            elif char == ")":
+                paren_depth = max(0, paren_depth - 1)
+            elif char == "}" and paren_depth == 0:
+                if path_stack:
+                    path_stack.pop()
+            index += 1
 
     return prims
 
@@ -1979,10 +1997,10 @@ def _parse_usda_blocks(text: str) -> List[Dict[str, Any]]:
     references or bindings to its parent.
     """
     stripped = _strip_usda_comments(text)
-    # Braces inside quoted strings and @asset@ paths are not nesting, so they
-    # are skipped with the same token scanner _matching_delimiter() uses.
-    # Positions are still recorded for skipped characters so that depth_at
-    # stays index-aligned with the text.
+    # Braces inside quoted strings, @asset@ paths and prim metadata blocks are
+    # not nesting, so they are skipped with the same token scanner
+    # _matching_delimiter() uses. Positions are still recorded for skipped
+    # characters so that depth_at stays index-aligned with the text.
     depth_at: List[int] = []
     depth = 0
     index = 0
@@ -1994,6 +2012,16 @@ def _parse_usda_blocks(text: str) -> List[Dict[str, Any]]:
             depth_at.extend([depth] * (skip_to - index))
             index = skip_to
             continue
+        if char == "(":
+            # A prim header may carry dictionaries (customData = { ... },
+            # assetInfo = { ... }) inside its metadata block. Counting their
+            # braces would shift the prim's inferred depth, so the whole
+            # balanced group is skipped like a quoted string.
+            close = _matching_delimiter(stripped, index, "(", ")")
+            if close != -1:
+                depth_at.extend([depth] * (close + 1 - index))
+                index = close + 1
+                continue
         if char == "{":
             depth += 1
         elif char == "}":

@@ -32,6 +32,9 @@ dependencies = [
 openusd = [
     "usd-core>=24.11,<27",
 ]
+timeline = [
+    "opentimelineio>=0.15,<1.0",
+]
 daemon = [
     "dcc-mcp-server>=0.18.0,<1.0.0",
 ]
@@ -41,6 +44,7 @@ dev = [
     "ruff>=0.8.0",
     "twine",
     "pyyaml>=6.0",
+    "opentimelineio>=0.15,<1.0",
     "dcc-mcp-server>=0.18.0,<1.0.0",
 ]
 

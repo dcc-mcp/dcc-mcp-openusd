@@ -64,7 +64,8 @@ Exit codes are stable:
 
 1. Create or select a Python 3.9+ environment.
 2. Install the exact adapter wheel as shown above. The base wheel enables
-   text-fallback; add `[openusd]` only when full pxr behavior is required.
+   text-fallback; add `[openusd]` only when full pxr behavior is required, and
+   `[timeline]` when the OTIO interop skill (`openusd-timeline`) is needed.
 3. Run `dcc-mcp-openusd doctor --json` to inspect the detected mode, package
    versions, capabilities, network configuration, and daemon plan.
 4. Run `dcc-mcp-openusd verify --json`. Verification creates and reopens a
@@ -206,7 +207,8 @@ older than 24.11. Install a compatible, exact wheel and rerun verification.
 
 This is a supported limited tier. Basic USDA stage/project/reference operations
 remain available. Install the `[openusd]` extra only when native material,
-light/camera, animation, or composition tools are required.
+light/camera, animation, or composition tools are required, and the
+`[timeline]` extra when OTIO timeline import/export is required.
 
 ### `runtime_smoke_failed` / exit 40
 
