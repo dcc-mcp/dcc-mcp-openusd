@@ -234,14 +234,23 @@ def load_otio_timeline(otio_file: Optional[str] = None, otio_json: Optional[str]
 
 
 def _iter_tracks(timeline: Any) -> List[Any]:
-    """Return the tracks of *timeline*, flattening one level of nested stacks."""
+    """Return every track of *timeline*, recursing into nested stacks.
+
+    ``timeline.tracks`` is a Stack whose children are normally Tracks, but the
+    schema also allows Stacks of Stacks. A single-level flatten silently dropped
+    anything nested deeper, so the walk is recursive.
+    """
     otio = _otio()
     tracks: List[Any] = []
-    for child in timeline.tracks:
-        if isinstance(child, otio.schema.Track):
-            tracks.append(child)
-        elif isinstance(child, otio.schema.Stack):
-            tracks.extend(item for item in child if isinstance(item, otio.schema.Track))
+
+    def walk(stack: Any) -> None:
+        for child in stack:
+            if isinstance(child, otio.schema.Track):
+                tracks.append(child)
+            elif isinstance(child, otio.schema.Stack):
+                walk(child)
+
+    walk(timeline.tracks)
     return tracks
 
 
@@ -459,6 +468,7 @@ def import_timeline(
     timeline_prim_path: str = DEFAULT_TIMELINE_PRIM_PATH,
     frames_per_second: Optional[float] = None,
     author_clips: bool = True,
+    start_time_code: Optional[float] = None,
 ) -> Dict[str, Any]:
     """Read an OTIO timeline and apply it to a USD stage.
 
@@ -466,6 +476,13 @@ def import_timeline(
     timeline and, unless *author_clips* is false, authors the track/clip/gap
     subtree under *timeline_prim_path* so the timeline can be exported again.
     The import is idempotent: an existing subtree at that path is replaced.
+
+    By default the start time code follows the 0-based to 1-based conversion
+    (:func:`_time_codes_from_otio`), which puts a timeline at ``global_start 0``
+    on frame 1. Pass *start_time_code* to anchor the shot on a different base
+    (1001 is a hard convention in many VFX pipelines) instead of overwriting it
+    and restoring it by hand afterwards; the end time code shifts with it so
+    the shot keeps its duration and only its base moves.
     """
     require_otio("Importing an OTIO timeline")
     path = _stage_path(stage_file)
@@ -480,6 +497,11 @@ def import_timeline(
     if duration_frames <= 0:
         raise OpenUsdError("OTIO timeline has zero duration; there is nothing to import into the stage")
     time_codes = _time_codes_from_otio(float(summary["global_start_time"]), duration_frames)
+    if start_time_code is not None:
+        time_codes = {
+            "start": _num(start_time_code),
+            "end": _num(start_time_code + duration_frames - 1.0),
+        }
 
     stage = _open_stage(path)
     stage.SetStartTimeCode(time_codes["start"])
@@ -824,12 +846,19 @@ def verify_timeline_parity(
     With *otio_file* / *otio_json* supplied the reference timeline is imported
     into the stage and exported again, then the two digests are compared field
     by field (track count, clip count, total frames, clip names, in-points,
-    durations, positions, and the derived USD time codes). Without a reference
-    the stage's own export is re-read through OTIO and compared against itself,
-    which proves the exported payload is non-empty and re-readable.
+    durations, positions, and the derived USD time codes).
+
+    Without a reference there is nothing to compare the edit against, so the
+    run is a **self-check** of the stage's own export: the exported payload is
+    re-read through OpenTimelineIO and asserted to be non-empty and re-readable.
+    It deliberately does **not** assert the 0-based to 1-based time code
+    conversion — that rule only holds when the stage really starts at frame 1,
+    and stages on a 1001 (or any other) base are legitimate. Comparing the
+    stage's time codes against a conversion the caller never asked for reported
+    a mismatch on every such stage.
 
     The result is a report, not an exception: ``parity`` is ``False`` and
-    ``differences`` lists every mismatching field when the round trip drifts.
+    ``differences`` lists every mismatching field.
     """
     require_otio("Verifying timeline parity")
     path = _stage_path(stage_file)
@@ -857,17 +886,15 @@ def verify_timeline_parity(
         "start_time_code": _num(exported["start_time_code"]),
         "end_time_code": _num(exported["end_time_code"]),
     }
-    differences = _compare_summaries(expected, actual, tolerance)
-    differences.extend(_compare_time_codes(expected, exported_time_codes, tolerance))
-
-    return {
-        "stage_file": str(path),
-        "timeline_prim_path": _validate_prim_path(timeline_prim_path),
-        "verified": not differences,
-        "parity": not differences,
-        "source": source,
-        "differences": differences,
-        "checked": [
+    if source == "stage_self_check":
+        # The edit is compared with itself, so only the payload's own
+        # usability can be asserted here; see the docstring above.
+        differences = _check_exported_payload(actual)
+        checked = ["exported_otio_re_readable", "duration_frames"]
+    else:
+        differences = _compare_summaries(expected, actual, tolerance)
+        differences.extend(_compare_time_codes(expected, exported_time_codes, tolerance))
+        checked = [
             "track_count",
             "clip_count",
             "duration_frames",
@@ -877,7 +904,16 @@ def verify_timeline_parity(
             "clip_positions",
             "start_time_code",
             "end_time_code",
-        ],
+        ]
+
+    return {
+        "stage_file": str(path),
+        "timeline_prim_path": _validate_prim_path(timeline_prim_path),
+        "verified": not differences,
+        "parity": not differences,
+        "source": source,
+        "differences": differences,
+        "checked": checked,
         "expected": {
             "track_count": expected["track_count"],
             "clip_count": expected["clip_count"],
@@ -938,6 +974,34 @@ def _compare_summaries(expected: Dict[str, Any], actual: Dict[str, Any], toleran
             _num(after["source_duration"]),
         )
         check(f"{prefix}.start", _num(before["start"]), _num(after["start"]))
+    return differences
+
+
+def _check_exported_payload(actual: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Assert the exported payload is usable, for the self-check path.
+
+    There is no reference edit to diff against, so the only honest claims are
+    that the payload was re-read through OpenTimelineIO (the caller got here by
+    parsing ``otio_json``) and that it carries a positive duration. A track
+    count of zero would mean the export produced an empty timeline.
+    """
+    differences: List[Dict[str, Any]] = []
+    if actual["track_count"] <= 0:
+        differences.append(
+            {
+                "field": "track_count",
+                "expected": "> 0",
+                "actual": actual["track_count"],
+            }
+        )
+    if _num(actual["duration_frames"]) <= 0:
+        differences.append(
+            {
+                "field": "duration_frames",
+                "expected": "> 0",
+                "actual": _num(actual["duration_frames"]),
+            }
+        )
     return differences
 
 

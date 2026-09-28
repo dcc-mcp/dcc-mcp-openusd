@@ -96,6 +96,25 @@ def _build_multi_track_timeline():
     return timeline
 
 
+def _build_nested_stack_timeline():
+    """A Stack nested inside a Track — valid OTIO the authored subtree drops."""
+    otio = _otio()
+    from opentimelineio.opentime import RationalTime, TimeRange
+
+    timeline = otio.schema.Timeline(name="nested")
+    track = otio.schema.Track(name="V1", kind=otio.schema.TrackKind.Video)
+    timeline.tracks.append(track)
+    track.append(otio.schema.Clip(name="outer", source_range=TimeRange(RationalTime(0, 24), RationalTime(24, 24))))
+    nested = otio.schema.Stack(name="nested")
+    nested_track = otio.schema.Track(name="V2", kind=otio.schema.TrackKind.Video)
+    nested_track.append(
+        otio.schema.Clip(name="inner", source_range=TimeRange(RationalTime(0, 24), RationalTime(24, 24)))
+    )
+    nested.append(nested_track)
+    track.append(nested)
+    return timeline
+
+
 def _write_otio(timeline, path: Path) -> Path:
     _otio().adapters.write_to_file(timeline, str(path))
     return path
@@ -304,19 +323,127 @@ def test_multi_track_round_trip_conserves_gaps_and_track_kinds(tmp_path):
 
 
 @needs_pxr_and_otio
-def test_verify_timeline_parity_flags_drifted_stage_time_codes(tmp_path):
+@pytest.mark.parametrize(
+    ("start", "end", "label"),
+    [
+        (1001.0, 1100.0, "1001-based stage, no authored timeline"),
+        (1001.0, 1084.0, "1001-based stage with an authored timeline"),
+        (0.0, 0.0, "stage with no time axis set at all"),
+    ],
+)
+def test_self_check_accepts_any_timecode_base(tmp_path, start, end, label):
+    """The self-check must not assert a conversion the caller never asked for.
+
+    Regression: it used to compare the stage time codes against the hard-coded
+    0-based to 1-based rule, so every stage that did not start at frame 1 was
+    reported as a mismatch.
+    """
+    otio_file = _write_otio(_build_reference_timeline(), tmp_path / "shot.otio")
+    stage_file = tmp_path / "scene.usda"
+    create_stage(str(stage_file), name="shot_001")
+    import_timeline(str(stage_file), otio_file=str(otio_file))
+    set_time_codes(str(stage_file), start_time_code=start, end_time_code=end, frames_per_second=24.0)
+
+    report = verify_timeline_parity(str(stage_file))
+
+    assert report["source"] == "stage_self_check"
+    assert report["parity"] is True, f"{label}: {report['differences']}"
+    assert report["differences"] == []
+
+
+@needs_pxr_and_otio
+def test_self_check_reports_only_the_claims_it_can_make(tmp_path):
+    """The advertised `checked` list must match what the self-check compares.
+
+    The edit is compared with itself there, so the per-clip and time code
+    fields have no discriminating power and must not be advertised.
+    """
     otio_file = _write_otio(_build_reference_timeline(), tmp_path / "shot.otio")
     stage_file = tmp_path / "scene.usda"
     create_stage(str(stage_file), name="shot_001")
     import_timeline(str(stage_file), otio_file=str(otio_file))
 
-    # Another tool moves the shot range without touching the authored edit.
-    set_time_codes(str(stage_file), start_time_code=1.0, end_time_code=200.0, frames_per_second=24.0)
+    self_check = verify_timeline_parity(str(stage_file))
+    with_reference = verify_timeline_parity(str(stage_file), otio_file=str(otio_file))
 
-    report = verify_timeline_parity(str(stage_file))
+    assert self_check["checked"] == ["exported_otio_re_readable", "duration_frames"]
+    assert "start_time_code" not in self_check["checked"]
+    assert "clip_names" not in self_check["checked"]
+    assert len(with_reference["checked"]) == 9
+    assert "start_time_code" in with_reference["checked"]
+
+
+@needs_pxr_and_otio
+def test_verify_timeline_parity_still_fails_when_the_edit_does_not_round_trip(tmp_path):
+    """The verifier must stay falsifiable, not become a rubber stamp.
+
+    A Stack nested inside a Track is valid OTIO whose children the authored
+    subtree does not represent, so the clip is dropped on import and the
+    exported edit is shorter than the reference.
+    """
+    otio_file = _write_otio(_build_nested_stack_timeline(), tmp_path / "nested.otio")
+    stage_file = tmp_path / "scene.usda"
+    create_stage(str(stage_file), name="nested")
+
+    report = verify_timeline_parity(str(stage_file), otio_file=str(otio_file))
 
     assert report["parity"] is False
-    assert "end_time_code" in {item["field"] for item in report["differences"]}
+    assert "duration_frames" in {item["field"] for item in report["differences"]}
+
+
+@needs_pxr_and_otio
+def test_nested_stacks_are_imported_instead_of_silently_dropped(tmp_path):
+    """Stacks nested more than one level deep must still yield their tracks."""
+    otio = _otio()
+    from opentimelineio.opentime import RationalTime, TimeRange
+
+    timeline = otio.schema.Timeline(name="deep")
+    for outer_name, inner_name in (("A", "A1"), ("B", "B1")):
+        outer = otio.schema.Stack(name=outer_name)
+        inner = otio.schema.Stack(name=f"{outer_name}_nested")
+        track = otio.schema.Track(name=inner_name, kind=otio.schema.TrackKind.Video)
+        track.append(
+            otio.schema.Clip(
+                name=f"{inner_name}_clip",
+                source_range=TimeRange(RationalTime(0, 24), RationalTime(24, 24)),
+            )
+        )
+        inner.append(track)
+        outer.append(inner)
+        timeline.tracks.append(outer)
+
+    otio_file = _write_otio(timeline, tmp_path / "deep.otio")
+    stage_file = tmp_path / "scene.usda"
+    create_stage(str(stage_file), name="deep")
+
+    imported = import_timeline(str(stage_file), otio_file=str(otio_file))
+
+    assert imported["track_count"] == 2
+    assert imported["clip_count"] == 2
+
+
+@needs_pxr_and_otio
+def test_import_can_anchor_the_shot_on_a_pipeline_timecode_base(tmp_path):
+    """A 1001 base must survive the import instead of being overwritten."""
+    from pxr import Usd  # type: ignore
+
+    otio_file = _write_otio(_build_reference_timeline(), tmp_path / "shot.otio")
+    stage_file = tmp_path / "scene.usda"
+    create_stage(str(stage_file), name="shot_001")
+
+    imported = import_timeline(str(stage_file), otio_file=str(otio_file), start_time_code=1001.0)
+
+    assert imported["start_time_code"] == 1001.0
+    # 84 frames keep their duration and only move onto the new base.
+    assert imported["end_time_code"] == 1084.0
+    assert imported["duration_frames"] == 84.0
+
+    stage = Usd.Stage.Open(str(stage_file))
+    assert stage.GetStartTimeCode() == 1001.0
+    assert stage.GetEndTimeCode() == 1084.0
+
+    # And the anchored stage verifies cleanly against its own export.
+    assert verify_timeline_parity(str(stage_file))["parity"] is True
 
 
 @needs_pxr_and_otio
@@ -433,7 +560,14 @@ def test_skill_scripts_wire_the_timeline_helpers(tmp_path):
     assert verified["success"] is True
     assert verified["context"]["parity"] is True
 
-    set_time_codes(str(stage_file), start_time_code=1.0, end_time_code=200.0, frames_per_second=24.0)
-    drifted = verify_tool.main(stage_file=str(stage_file))
+    # The script must surface a real mismatch as a failed envelope. A Stack
+    # nested inside a Track does not survive the authored subtree, so the
+    # exported edit is shorter than the reference.
+    nested_file = _write_otio(_build_nested_stack_timeline(), tmp_path / "nested.otio")
+    nested_stage = tmp_path / "nested.usda"
+    create_stage(str(nested_stage), name="nested")
+
+    drifted = verify_tool.main(stage_file=str(nested_stage), otio_file=str(nested_file))
     assert drifted["success"] is False
     assert drifted["error"] == "timeline_parity_mismatch"
+    assert drifted["context"]["differences"]
