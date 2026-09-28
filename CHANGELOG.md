@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.10.0](https://github.com/dcc-mcp/dcc-mcp-openusd/compare/v0.9.0...v0.10.0) (2026-09-28)
+
+
+### Features
+
+* **timeline:** add OTIO interop skill for USD stage time axes ([5312e03](https://github.com/dcc-mcp/dcc-mcp-openusd/commit/5312e03ab06f65401b8f0949f7603567f393587e))
+
+
+### Bug Fixes
+
+* **timeline:** self-check must not assert a time code base it never asked for ([#62](https://github.com/dcc-mcp/dcc-mcp-openusd/issues/62)) ([4258706](https://github.com/dcc-mcp/dcc-mcp-openusd/commit/4258706404717f7c6d71610d4d14d85224d590d6))
+
 ## [0.9.0](https://github.com/dcc-mcp/dcc-mcp-openusd/compare/v0.8.2...v0.9.0) (2026-09-25)
 
 
