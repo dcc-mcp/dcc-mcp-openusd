@@ -33,6 +33,12 @@ tools:
           default: true
           description: >-
             Author the track/clip/gap subtree. Set false to only set time codes.
+        start_time_code:
+          type: number
+          description: >-
+            Anchor the shot on this start time code instead of the value the
+            0-based to 1-based conversion derives. Use it to keep a 1001 (or
+            other) pipeline base; the end time code shifts with it.
     read_only: false
     destructive: false
     idempotent: true
@@ -53,7 +59,8 @@ tools:
       Read a stage's time axis and time samples and produce an
       OpenTimelineIO timeline. Rebuilds the edit from the authored timeline
       subtree, or synthesizes a single video track covering the stage range.
-      Requires the optional opentimelineio package.
+      Writing output_file creates parent directories and writes the file, so
+      this tool is not read-only. Requires the optional opentimelineio package.
     input_schema:
       type: object
       required: [stage_file]
@@ -78,14 +85,14 @@ tools:
           description: >-
             Include otio_json in the result. Defaults to true when output_file
             is omitted.
-    read_only: true
+    read_only: false
     destructive: false
     idempotent: true
     execution: sync
     timeout_hint_secs: 60
     source_file: scripts/export_timeline.py
     annotations:
-      read_only_hint: true
+      read_only_hint: false
       destructive_hint: false
       idempotent_hint: true
     next-tools:
@@ -126,6 +133,12 @@ tools:
           type: number
           description: >-
             Frame rate used when re-importing the reference timeline.
+        start_time_code:
+          type: number
+          description: >-
+            Start time code used when re-importing the reference timeline.
+            Pass the same value that was used for import_timeline, otherwise
+            the re-import rewrites the shot back onto a 1-based range.
         tolerance:
           type: number
           default: 0.000001
