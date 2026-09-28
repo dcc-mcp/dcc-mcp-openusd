@@ -133,6 +133,12 @@ tools:
           type: number
           description: >-
             Frame rate used when re-importing the reference timeline.
+        start_time_code:
+          type: number
+          description: >-
+            Start time code used when re-importing the reference timeline.
+            Pass the same value that was used for import_timeline, otherwise
+            the re-import rewrites the shot back onto a 1-based range.
         tolerance:
           type: number
           default: 0.000001

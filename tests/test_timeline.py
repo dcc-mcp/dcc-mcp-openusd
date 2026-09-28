@@ -447,6 +447,86 @@ def test_import_can_anchor_the_shot_on_a_pipeline_timecode_base(tmp_path):
 
 
 @needs_pxr_and_otio
+def test_verify_with_reference_keeps_the_anchor_it_was_given(tmp_path):
+    """A reference run must not rewrite the anchor and then call it a match.
+
+    Regression: verify re-imports the reference and used to do so without the
+    caller's `start_time_code`, so a 1001-based shot was silently moved back to
+    1..84 — and compared against that very rewrite, which reported green.
+    """
+    from pxr import Usd  # type: ignore
+
+    reference = _build_reference_timeline()
+    otio_file = _write_otio(reference, tmp_path / "shot.otio")
+    stage_file = tmp_path / "scene.usda"
+    create_stage(str(stage_file), name="shot_001")
+    import_timeline(str(stage_file), otio_file=str(otio_file), start_time_code=1001.0)
+
+    report = verify_timeline_parity(str(stage_file), otio_file=str(otio_file), start_time_code=1001.0)
+
+    assert report["parity"] is True
+    assert report["differences"] == []
+
+    # The anchor survives, which is the whole point of the parameter.
+    stage = Usd.Stage.Open(str(stage_file))
+    assert stage.GetStartTimeCode() == 1001.0
+    assert stage.GetEndTimeCode() == 1084.0
+
+
+@needs_pxr_and_otio
+def test_verify_without_the_anchor_still_documents_the_default_conversion(tmp_path):
+    """Without `start_time_code` the reference run uses the 1-based default.
+
+    This pins the documented conversion rather than the silent rewrite: the
+    caller decides the base, and omitting the argument means frame 1.
+    """
+    from pxr import Usd  # type: ignore
+
+    otio_file = _write_otio(_build_reference_timeline(), tmp_path / "shot.otio")
+    stage_file = tmp_path / "scene.usda"
+    create_stage(str(stage_file), name="shot_001")
+
+    report = verify_timeline_parity(str(stage_file), otio_file=str(otio_file))
+
+    assert report["parity"] is True
+    stage = Usd.Stage.Open(str(stage_file))
+    assert stage.GetStartTimeCode() == 1.0
+    assert stage.GetEndTimeCode() == 84.0
+
+
+@needs_pxr_and_otio
+def test_self_check_echo_matches_what_it_compared(tmp_path):
+    """The echo must not show time codes the self-check never compared.
+
+    Reporting `expected 1.0` against `actual 1001.0` next to a green verdict
+    reads as a broken comparison, so those fields are omitted instead.
+    """
+    otio_file = _write_otio(_build_reference_timeline(), tmp_path / "shot.otio")
+    stage_file = tmp_path / "scene.usda"
+    create_stage(str(stage_file), name="shot_001")
+    import_timeline(str(stage_file), otio_file=str(otio_file), start_time_code=1001.0)
+
+    self_check = verify_timeline_parity(str(stage_file))
+    anchored = verify_timeline_parity(str(stage_file), otio_file=str(otio_file), start_time_code=1001.0)
+    default = verify_timeline_parity(str(stage_file), otio_file=str(otio_file))
+
+    for block in (self_check["expected"], self_check["actual"]):
+        assert "start_time_code" not in block
+        assert "end_time_code" not in block
+        assert block["clip_count"] == 3
+
+    # Anchored: the expectation follows the anchor, not the conversion.
+    assert anchored["parity"] is True
+    assert anchored["expected"]["start_time_code"] == 1001.0
+    assert anchored["actual"]["start_time_code"] == 1001.0
+
+    # Unanchored: the documented 1-based conversion still applies.
+    assert default["parity"] is True
+    assert default["expected"]["start_time_code"] == 1.0
+    assert default["actual"]["start_time_code"] == 1.0
+
+
+@needs_pxr_and_otio
 def test_export_synthesizes_a_track_when_no_timeline_is_authored(tmp_path):
     otio = _otio()
     stage_file = tmp_path / "scene.usda"

@@ -840,6 +840,7 @@ def verify_timeline_parity(
     timeline_prim_path: str = DEFAULT_TIMELINE_PRIM_PATH,
     frames_per_second: Optional[float] = None,
     tolerance: float = PARITY_TOLERANCE,
+    start_time_code: Optional[float] = None,
 ) -> Dict[str, Any]:
     """Assert that a USD stage and an OTIO timeline describe the same edit.
 
@@ -857,6 +858,12 @@ def verify_timeline_parity(
     stage's time codes against a conversion the caller never asked for reported
     a mismatch on every such stage.
 
+    With a reference the timeline is imported into the stage again, so
+    *start_time_code* and *frames_per_second* must be forwarded: they are what
+    anchors the shot on a non-default base, and re-importing without them would
+    rewrite the stage back to a 1-based range and then report a green match
+    against the very rewrite it just performed.
+
     The result is a report, not an exception: ``parity`` is ``False`` and
     ``differences`` lists every mismatching field.
     """
@@ -871,6 +878,7 @@ def verify_timeline_parity(
             otio_json=otio_json,
             timeline_prim_path=timeline_prim_path,
             frames_per_second=frames_per_second,
+            start_time_code=start_time_code,
         )
         source = "reference_timeline"
     else:
@@ -891,9 +899,24 @@ def verify_timeline_parity(
         # usability can be asserted here; see the docstring above.
         differences = _check_exported_payload(actual)
         checked = ["exported_otio_re_readable", "duration_frames"]
+        expected_time_codes = dict(exported_time_codes)
     else:
+        # Anchoring the shot replaces the conversion, so the conversion value
+        # is not what the stage should read — the anchor is. Comparing against
+        # the conversion would flag every anchored stage, which is the same
+        # assertion the self-check path had to drop.
+        if start_time_code is not None:
+            expected_time_codes = {
+                "start_time_code": _num(start_time_code),
+                "end_time_code": _num(start_time_code + expected["duration_frames"] - 1.0),
+            }
+        else:
+            expected_time_codes = {
+                "start_time_code": _num(expected["start_time_code"]),
+                "end_time_code": _num(expected["end_time_code"]),
+            }
         differences = _compare_summaries(expected, actual, tolerance)
-        differences.extend(_compare_time_codes(expected, exported_time_codes, tolerance))
+        differences.extend(_compare_time_codes(expected_time_codes, exported_time_codes, tolerance))
         checked = [
             "track_count",
             "clip_count",
@@ -914,21 +937,36 @@ def verify_timeline_parity(
         "source": source,
         "differences": differences,
         "checked": checked,
+        # The echo mirrors the comparison: a self-check never compares time
+        # codes, so echoing them would show two different values next to a
+        # green verdict and read as a bug to anyone inspecting the report.
         "expected": {
             "track_count": expected["track_count"],
             "clip_count": expected["clip_count"],
             "duration_frames": expected["duration_frames"],
-            "start_time_code": expected["start_time_code"],
-            "end_time_code": expected["end_time_code"],
             "clips": expected["clips"],
+            **(
+                {}
+                if source == "stage_self_check"
+                else {
+                    "start_time_code": expected_time_codes["start_time_code"],
+                    "end_time_code": expected_time_codes["end_time_code"],
+                }
+            ),
         },
         "actual": {
             "track_count": actual["track_count"],
             "clip_count": actual["clip_count"],
             "duration_frames": actual["duration_frames"],
-            "start_time_code": exported_time_codes["start_time_code"],
-            "end_time_code": exported_time_codes["end_time_code"],
             "clips": actual["clips"],
+            **(
+                {}
+                if source == "stage_self_check"
+                else {
+                    "start_time_code": exported_time_codes["start_time_code"],
+                    "end_time_code": exported_time_codes["end_time_code"],
+                }
+            ),
         },
         "runtime": "pxr" if detect_runtime().has_pxr else "text-fallback",
     }
