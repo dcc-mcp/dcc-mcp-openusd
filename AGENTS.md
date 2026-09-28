@@ -36,14 +36,20 @@ Run `vx just --list` for the authoritative list — **never invent a recipe name
 ## Release
 
 - release-please drives versioning from Conventional Commits on `main`.
-- `feat:` → minor, `fix:` → patch, `chore:`/`docs:`/`ci:` → **no release**.
+- `feat:` → minor, `fix:` → patch. Every other prefix still lands on **patch**:
+  `DefaultVersioningStrategy.determineReleaseType()` falls back to
+  `PatchVersionUpdate` when the batch has no `feat:` and no breaking change, so
+  `chore:`/`docs:`/`ci:` are **not** “no release”.
+- What those prefixes change is the changelog: `chore:`/`ci:`/`style`/`refactor`/
+  `test`/`build` are `hidden: true` sections, while `docs:` is a **visible**
+  `Documentation` section (`release-type: python`).
 - Version is bumped in `pyproject.toml` (`$.project.version`) and `src/dcc_mcp_openusd/__version__.py`.
-- Use `chore:`/`docs:` for config and doc work so release-please does not cut a valueless version.
+- Use `chore:` for config and doc work: it still bumps the version, but keeps the changelog free of valueless entries.
 
 ## Do / Don't
 
 - **Do** single-source agent instructions here. This is the only agent contract file at the repo root.
 - **Do** prefer typed skills and tools over raw scripts, and drive the host through `dcc-mcp-cli` (`search` / `describe` / `call` / `load-skill`) rather than adapter-local Python.
-- **Don't** add `CLAUDE.md` / `GEMINI.md` / `CURSOR.md` / `ANTHROPIC.md` / `OPENAI.md` / `COPILOT.md` / `CODEBUDDY.md` / `.cursorrules` / `.clinerules` / `.windsurfrules` at the root. Vendor-specific notes live under `docs/integrations/`, linked from here.
+- **Don't** add `CLAUDE.md` / `GEMINI.md` / `CURSOR.md` / `ANTHROPIC.md` / `OPENAI.md` / `COPILOT.md` / `CODEBUDDY.md` / `.cursorrules` / `.clinerules` / `.windsurfrules` at the root. This repo has no `docs/integrations/`; keep any vendor-specific notes here.
 - **Don't** hardcode an exact version in tests (`assert __version__ == "X.Y.Z"`) — release-please bumps will break it. Use `>=` or read package metadata.
 - **Don't** commit build artifacts to the repo root (`dist/`, `build/`, `*.egg-info`, `coverage.json`).
