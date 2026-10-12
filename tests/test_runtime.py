@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import zipfile
 
+import pytest
+
 from dcc_mcp_openusd.runtime import (
     OpenUsdError,
     _build_nested_block,
@@ -180,6 +182,7 @@ def test_all_runtime_fields_present(tmp_path):
     assert "runtime" in snapshot_stage(str(stage_file), str(tmp_path / "snaps"))
     assert "runtime" in define_xform(str(stage_file), "/World/Test")
     assert "runtime" in define_prim(str(stage_file), "/World/Test2", "Xform")
+    create_stage(str(tmp_path / "assets" / "ref.usda"), name="reference")
     assert "runtime" in add_reference(str(stage_file), "/World/Ref", "assets/ref.usda")
     assert "runtime" in set_stage_metadata(str(stage_file), up_axis="Y")
     assert "runtime" in validate_stage(str(stage_file))
@@ -486,3 +489,24 @@ def test_set_stage_metadata_no_duplicate_header_all_fields(tmp_path, monkeypatch
     assert "metersPerUnit = 0.01" in content
     assert 'doc = "desc"' in content
     assert "framesPerSecond = 30" in content
+
+
+def test_fallback_packaging_does_not_claim_dependency_completeness(tmp_path, monkeypatch):
+    from dcc_mcp_openusd.runtime import RuntimeInfo
+
+    monkeypatch.setattr("dcc_mcp_openusd.runtime._RUNTIME_INFO", RuntimeInfo(has_pxr=False))
+    path = tmp_path / "scene.usda"
+    create_stage(str(path))
+    result = package_usdz(str(path), str(tmp_path / "scene.usdz"))
+    assert result["complete"] is None
+    assert result["dependency_check"] == "unavailable"
+    assert validate_stage(str(path))["native_checks"] == "unavailable"
+
+
+def test_package_cannot_overwrite_input(tmp_path):
+    path = tmp_path / "scene.usda"
+    create_stage(str(path))
+    original = path.read_bytes()
+    with pytest.raises(OpenUsdError, match="differ"):
+        package_usdz(str(path), str(path))
+    assert path.read_bytes() == original

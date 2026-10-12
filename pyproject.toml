@@ -73,6 +73,7 @@ include = [
     "tools",
     "README.md",
     "docs/uv-textures.md",
+    "docs/native-validation.md",
     "install.md",
     "CHANGELOG.md",
     "LICENSE",

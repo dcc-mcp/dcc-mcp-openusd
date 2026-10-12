@@ -12,6 +12,7 @@ import math
 import os
 import re
 import shutil
+import tempfile
 import time
 import zipfile
 from dataclasses import dataclass, field
@@ -393,6 +394,8 @@ VALIDATION_RULES: Dict[str, str] = {
     "INVALID_METERS_PER_UNIT": "metersPerUnit must be a positive number",
     "METERS_PER_UNIT_MISMATCH": "Sublayer declares a different metersPerUnit than the root layer",
     "UNRESOLVED_REFERENCE": "Reference asset path cannot be resolved on disk",
+    "UNRESOLVED_VOLUME_ASSET": "A connected OpenVDB field asset cannot be resolved",
+    "INVALID_POINT_INSTANCER": "PointInstancer arrays or prototype targets are inconsistent",
     "REFERENCE_CYCLE": "Reference chain loops back to an already visited layer",
     "INCOMPLETE_MATERIAL": "Material has no surface output or shader",
     "DANGLING_MATERIAL_BINDING": "material:binding targets a missing or non-Material prim",
@@ -415,6 +418,8 @@ _FIX_SKILL_BY_CODE: Dict[str, str] = {
 #: non-empty for every rule instead of depending on the caller.
 _GUIDANCE_BY_CODE: Dict[str, str] = {
     "UNRESOLVED_REFERENCE": "Repair the reference asset path or point it at a file that exists",
+    "UNRESOLVED_VOLUME_ASSET": "Provide the connected VDB file at its authored path, or repair the field filePath",
+    "INVALID_POINT_INSTANCER": "Align per-instance arrays at each sample and provide valid prototype targets and indices",
     "DANGLING_MATERIAL_BINDING": "Rebind the prim to a Material that exists",
     "UNBOUND_MATERIAL": "Bind the material to a prim, or delete the material",
     "INVALID_STAGE_HEADER": "Add a '#usda 1.0' header line to the layer",
@@ -447,6 +452,8 @@ _RULE_SEVERITY: Dict[str, str] = {
     "INVALID_METERS_PER_UNIT": "error",
     "METERS_PER_UNIT_MISMATCH": "error",
     "UNRESOLVED_REFERENCE": "error",
+    "UNRESOLVED_VOLUME_ASSET": "error",
+    "INVALID_POINT_INSTANCER": "error",
     "REFERENCE_CYCLE": "error",
     "INCOMPLETE_MATERIAL": "warning",
     "DANGLING_MATERIAL_BINDING": "error",
@@ -494,10 +501,10 @@ class _StageFacts:
 def validate_stage(stage_file: str, strict: bool = False) -> Dict[str, Any]:
     """Validate a stage using pxr when available plus adapter-level invariants.
 
-    The rule set is shared by both runtimes. ``pxr`` is only used to extract
-    composition facts (prim tree, references, material bindings); layer metadata
-    and every rule itself run through the same code, so a stage is judged by the
-    same rules whether or not ``pxr`` is installed.
+    Root-layer rules are shared by both runtimes. Native USD additionally
+    checks connected OpenVDB dependencies and composed PointInstancer arrays,
+    without loading payloads. ``native_checks`` reports unavailable when these
+    semantic checks cannot run; text-fallback does not claim native coverage.
 
     Every issue follows the frozen :class:`~dcc_mcp_openusd.validation.ValidationIssue`
     schema: a stable ``code`` from :data:`VALIDATION_RULES`, a ``severity``, a
@@ -512,12 +519,35 @@ def validate_stage(stage_file: str, strict: bool = False) -> Dict[str, Any]:
     path = _existing_file(stage_file)
     facts, runtime = _collect_stage_facts(path)
     issues = _run_validators(facts, strict)
+    native_checks = "unavailable"
+    if runtime == "pxr" and not facts.open_error:
+        from dcc_mcp_openusd.native_validation import collect_native_issues
+
+        native_checks = "performed"
+        try:
+            native_issues = collect_native_issues(str(path))
+        except Exception as exc:
+            native_checks = "failed"
+            native_issues = [("STAGE_OPEN_FAILED", f"Native semantic checks failed: {exc}", "/")]
+        for code, message, prim_path in native_issues:
+            suggested_fix, next_steps = _next_steps_for(code, str(path))
+            issues.append(
+                ValidationIssue(
+                    code=code,
+                    severity=_RULE_SEVERITY[code],
+                    message=message,
+                    location=prim_location(prim_path),
+                    suggested_fix=suggested_fix,
+                    next_steps=next_steps,
+                ).to_dict()
+            )
     result = ValidationResult.from_issues(
         str(path),
         issues,
         extra={
             "runtime": runtime,
             "rules": sorted(VALIDATION_RULES),
+            "native_checks": native_checks,
         },
     )
     payload = result.to_dict()
@@ -1587,24 +1617,57 @@ def snapshot_stage(stage_file: str, output_dir: str, name: Optional[str] = None)
 
 
 def package_usdz(stage_file: str, output_file: str) -> Dict[str, Any]:
-    """Create a USDZ-style stored zip archive containing the root stage."""
+    """Package with explicit dependency completeness; never hide native failure.
+
+    Native packages reject unresolved dependencies.
+    Text fallback remains a root-only ZIP with unknown completeness.
+    """
     source = _existing_file(stage_file)
     target = Path(output_file).expanduser().resolve()
-    target.parent.mkdir(parents=True, exist_ok=True)
-
+    if source == target:
+        raise OpenUsdError("output_file must differ from stage_file")
+    result: Dict[str, Any] = {"stage_file": str(source), "package_file": str(target)}
     if detect_runtime().has_pxr:
+        from pxr import Ar, UsdUtils  # type: ignore
+
+        context = Ar.GetResolver().CreateDefaultContextForAsset(str(source))
         try:
-            from pxr import UsdUtils  # type: ignore
+            with Ar.ResolverContextBinder(context):
+                layers, _, unresolved = UsdUtils.ComputeAllDependencies(str(source))
+        except Exception as exc:
+            raise OpenUsdError(f"USDZ dependency check failed: {exc}") from exc
+        if not layers:
+            raise OpenUsdError("USDZ dependency check could not open the root layer")
+        unresolved = sorted({str(asset) for asset in unresolved})
+        if unresolved:
+            raise OpenUsdError(
+                "USDZ has unresolved dependencies: "
+                + ", ".join(unresolved)
+                + ". Repair dependencies before packaging; optional external assets may remain in an unpackaged USD stage."
+            )
+        target.parent.mkdir(parents=True, exist_ok=True)
+        # Keep an existing deliverable intact on a native failure. Never turn a
+        # failed native package into a successful root-only fallback archive.
+        with tempfile.TemporaryDirectory(prefix=".usdz-", dir=str(target.parent)) as directory:
+            temporary = Path(directory) / target.name
+            try:
+                with Ar.ResolverContextBinder(context):
+                    ok = UsdUtils.CreateNewUsdzPackage(str(source), str(temporary))
+            except Exception as exc:
+                raise OpenUsdError(f"Native USDZ packaging failed: {exc}") from exc
+            if not ok:
+                raise OpenUsdError("Native USDZ packaging failed")
+            temporary.replace(target)
+        result.update(
+            runtime="pxr", dependency_check="performed", complete=not unresolved, unresolved_assets=unresolved
+        )
+        return result
 
-            ok = UsdUtils.CreateNewUsdzPackage(str(source), str(target))
-            if ok:
-                return {"stage_file": str(source), "package_file": str(target), "runtime": "pxr"}
-        except Exception:
-            pass
-
+    target.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(target, "w", compression=zipfile.ZIP_STORED) as zf:
         zf.write(source, source.name)
-    return {"stage_file": str(source), "package_file": str(target), "runtime": "text-fallback"}
+    result.update(runtime="text-fallback", dependency_check="unavailable", complete=None, unresolved_assets=[])
+    return result
 
 
 # ── internal helpers ──

@@ -125,11 +125,11 @@ Every public function returns a `"runtime"` field in its result dict —
 | `create_stage`, `create_project` | USDA text | Native `Usd.Stage` |
 | `list_stage`, `define_xform`, `define_prim` | USDA parse + insert | Native API |
 | `add_reference`, `set_xform_ops` | USDA text | Native API |
-| `validate_stage` | Shared rule set (USDA parse) | Shared rule set (`Sdf` specs) |
+| `validate_stage` | Root-layer rules (USDA parse) | Root-layer rules + composed VDB/instancer checks |
 | `fix_reference_path` (report + rewrite) | USDA text | Shared readback |
 | `suggest_material_bind` (suggest) | USDA parse | Shared readback |
 | `snapshot_stage` | File copy | File copy |
-| `package_usdz` | `zipfile` | `UsdUtils.CreateNewUsdzPackage` |
+| `package_usdz` | Unchecked root-only ZIP | Dependency preflight + native USDZ; fails on missing assets |
 | Material binding (`UsdShade`) | — | Requires pxr |
 | Camera / Light (`UsdGeomCamera`, `UsdLux`) | — | Requires pxr |
 | Time-sampled animation | — | Requires pxr |
@@ -140,12 +140,19 @@ Advanced features that cannot be expressed through text-fallback raise
 `OpenUsdError("... requires the Pixar USD (pxr) package. Install it with: pip install usd-core")`
 when pxr is absent.
 
-`validate_stage` is the exception: it runs the **same rule set** on both runtimes.
-`pxr` is used only to parse the file (`Sdf.Layer`); both runtimes report facts for
-the **root layer only** — prims composed in from references and sublayers are out
-of scope — so the two collectors stay equivalent and reference asset paths are
-always resolved against the root layer's directory. The registry is
-`dcc_mcp_openusd.runtime.VALIDATION_RULES`.
+`validate_stage` shares its root-layer metadata, composition and material rules
+across both runtimes. With `pxr`, it additionally validates connected OpenVDB
+field dependencies and PointInstancer parallel arrays/prototype targets on the
+composed stage, without loading payloads. Optional unrelated asset attributes
+are not treated as required volume dependencies. The `native_checks` result
+field reports `performed`, `unavailable`, or `failed`.
+
+Native `package_usdz` requires all package dependencies to resolve and never
+silently downgrades a failed native package to a root-only ZIP. Its result includes
+`dependency_check`, `complete`, and `unresolved_assets`; text-fallback reports
+`complete: null` and `dependency_check: "unavailable"`. See the
+[validation and packaging boundaries (English / 中文)](docs/native-validation.md).
+The registry is `dcc_mcp_openusd.runtime.VALIDATION_RULES`.
 
 The result is a `ValidationResult`
 (`{success, message, stage_file, issues, summary, next_steps}`): `summary` counts

@@ -22,16 +22,17 @@ Validate authored stages and package them for handoff.
 
 ## `validate_stage`
 
-Runs the same rule set whether or not the Pixar USD (`pxr`) package is
-installed. `pxr` is only used to parse the file (`Sdf.Layer`); every rule is
-shared, so a stage is judged identically by the `pxr` and `text-fallback`
-runtimes.
+The root-layer rules are shared by the `pxr` and `text-fallback` runtimes.
+Their metadata, reference and material facts remain root-layer-only; layer
+metadata is compared across the sublayer chain.
 
-Both runtimes report facts for the **root layer only** — prims composed in
-from references and sublayers are out of scope. That keeps the two collectors
-equivalent and means reference asset paths always resolve against the root
-layer's directory. Layer-level metadata (`upAxis`, `metersPerUnit`) is still
-compared across the whole `subLayers` chain.
+With `pxr`, two additional composed-stage semantic checks run without loading
+payloads: connected OpenVDB field files must resolve, and PointInstancer
+required/optional per-instance arrays and prototype targets must agree.
+Attributes resolve at the union of authored time samples, so sparse sampling
+is supported. Optional unrelated asset attributes are not volume dependencies.
+The `native_checks` field reports `performed`, `unavailable` (no pxr), or
+`failed`. Fallback validation does not claim native semantic coverage.
 
 Prims authored inside a `variantSet` block **are** reported, at the flat path
 they compose to (`/Root/Looks/RedMat`), and every variant is reported rather
@@ -128,6 +129,8 @@ so the loop `validate -> suggested_fix -> validate` is safe to automate.
 | `INVALID_METERS_PER_UNIT` | error | `metersPerUnit` is not a positive number |
 | `METERS_PER_UNIT_MISMATCH` | error | Sublayer `metersPerUnit` differs from the root layer |
 | `UNRESOLVED_REFERENCE` | error | Reference/payload asset cannot be resolved on disk |
+| `UNRESOLVED_VOLUME_ASSET` | error | Native: a connected OpenVDB field file cannot resolve |
+| `INVALID_POINT_INSTANCER` | error | Native: inconsistent instance arrays, invalid indices or missing prototype target |
 | `REFERENCE_CYCLE` | error | Reference chain loops back on itself |
 | `INCOMPLETE_MATERIAL` | warning | Material has no surface output or shader |
 | `DANGLING_MATERIAL_BINDING` | error | `material:binding` targets a missing or non-Material prim |
@@ -152,3 +155,18 @@ validate_stage(stage_file, strict=False)
 Sample stages covering the three high-frequency errors live in
 `tests/data/usd/`: `broken_reference.usda`, `unit_mismatch.usda`,
 `unbound_material.usda`.
+
+## `package_usdz`
+
+Native packaging first calls `UsdUtils.ComputeAllDependencies`. Missing package
+assets raise an actionable error before touching an existing output. Native
+packager errors never trigger an implicit ZIP fallback; output is replaced only
+after successful packaging. A successful native result reports
+`dependency_check: "performed"`, `complete: true`, and `unresolved_assets: []`.
+Optional external assets may be legal in ordinary USD, but a self-contained
+package requires them to resolve too. This is separate from stage validation.
+
+Without pxr, the existing root-only ZIP mode remains available and explicitly
+reports `dependency_check: "unavailable"` and `complete: null`. It is not a
+validated, dependency-complete USDZ. Native resolution does not guarantee that
+every host can consume every contained format (for example, packed VDB files).
