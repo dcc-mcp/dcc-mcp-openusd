@@ -18,7 +18,7 @@ tools:
         focus_distance:
           type: number
           default: 100.0
-          description: Focus distance.
+          description: Focus distance in stage scene units.
         f_stop:
           type: number
           default: 2.8

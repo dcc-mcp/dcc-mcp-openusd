@@ -2650,15 +2650,26 @@ def create_camera(
     focus_distance: float = 100.0,
     f_stop: float = 2.8,
 ) -> Dict[str, Any]:
-    """Create a UsdGeomCamera prim."""
+    """Create a camera with focal length in mm and focus distance in scene units."""
     path = _existing_file(stage_file)
     prim_path = _normalize_prim_path(prim_path)
 
     stage = _open_stage(path)
     from pxr import UsdGeom  # type: ignore
 
+    # USD lens/sensor attributes are in tenths of a scene unit, not mm.
+    # A centimetre stage happens to have a 1:1 conversion; metre stages do not.
+    meters_per_unit = UsdGeom.GetStageMetersPerUnit(stage)
+    if not math.isfinite(meters_per_unit) or meters_per_unit <= 0:
+        raise OpenUsdError("Camera authoring requires positive finite metersPerUnit")
+    mm_to_camera_units = 1.0 / (100.0 * meters_per_unit)
     camera = UsdGeom.Camera.Define(stage, prim_path)
-    camera.CreateFocalLengthAttr().Set(float(focal_length))
+    camera.CreateFocalLengthAttr().Set(float(focal_length) * mm_to_camera_units)
+    # Scale the standard sensor defaults as well so the field of view remains
+    # unit-independent. Explicit existing apertures belong to the caller.
+    for aperture in (camera.GetHorizontalApertureAttr(), camera.GetVerticalApertureAttr()):
+        if not aperture.HasAuthoredValueOpinion():
+            aperture.Set(aperture.Get() * mm_to_camera_units)
     camera.CreateFocusDistanceAttr().Set(float(focus_distance))
     camera.CreateFStopAttr().Set(float(f_stop))
     stage.GetRootLayer().Save()
