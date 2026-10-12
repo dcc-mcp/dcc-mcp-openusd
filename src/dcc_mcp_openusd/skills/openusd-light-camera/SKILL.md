@@ -25,6 +25,11 @@ provides `set_transform` for positioning any Xformable prim and `set_visibility`
 for beauty/FX layer control on Imageable prims. Requires the pxr
 OpenUSD runtime.
 
+`create_camera` takes `focal_length` in millimetres and `focus_distance` in
+scene units. USD stores focal length and sensor apertures in tenths of a
+scene unit, so the tool converts the lens and unauthored standard sensor
+defaults using `metersPerUnit`. Existing authored sensor apertures are preserved.
+
 ## Workflow
 
 1. Ensure a stage exists.
