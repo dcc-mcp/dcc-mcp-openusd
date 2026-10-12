@@ -2765,6 +2765,23 @@ def create_sphere_light(
     }
 
 
+def _reuse_xform_op(xform: Any, kind: str) -> Any:
+    """Reuse an unsuffixed op, including inherited or currently unordered ops."""
+    from pxr import UsdGeom  # type: ignore
+
+    suffix = {"Translate": "translate", "RotateXYZ": "rotateXYZ", "Scale": "scale"}[kind]
+    attr = xform.GetPrim().GetAttribute(f"xformOp:{suffix}")
+    if not attr:
+        return getattr(xform, f"Add{kind}Op")()
+    # GetTranslateOp/GetScaleOp only find ordered operations. Wrapping the
+    # existing attribute also preserves the precision of an inactive operation.
+    op = UsdGeom.XformOp(attr)
+    ordered = xform.GetOrderedXformOps()
+    if all(existing.GetOpName() != op.GetOpName() for existing in ordered):
+        xform.SetXformOpOrder([*ordered, op], resetXformStack=xform.GetResetXformStack())
+    return op
+
+
 def set_transform(
     stage_file: str,
     prim_path: str,
@@ -2785,11 +2802,11 @@ def set_transform(
 
     xform = UsdGeom.Xformable(prim)
     if translate:
-        xform.AddTranslateOp().Set(Gf.Vec3d(*[float(v) for v in translate[:3]]))
+        _reuse_xform_op(xform, "Translate").Set(Gf.Vec3d(*[float(v) for v in translate[:3]]))
     if rotate:
-        xform.AddRotateXYZOp().Set(Gf.Vec3f(*[float(v) for v in rotate[:3]]))
+        _reuse_xform_op(xform, "RotateXYZ").Set(Gf.Vec3f(*[float(v) for v in rotate[:3]]))
     if scale:
-        xform.AddScaleOp().Set(Gf.Vec3f(*[float(v) for v in scale[:3]]))
+        _reuse_xform_op(xform, "Scale").Set(Gf.Vec3f(*[float(v) for v in scale[:3]]))
     stage.GetRootLayer().Save()
     return {
         "stage_file": str(path),
@@ -2875,9 +2892,9 @@ def author_xform_samples(
         raise OpenUsdError(f"Prim not found: {prim_path}")
 
     xform = UsdGeom.Xformable(prim)
-    translate_op = xform.AddTranslateOp()
-    rotate_op = xform.AddRotateXYZOp()
-    scale_op = xform.AddScaleOp()
+    translate_op = _reuse_xform_op(xform, "Translate")
+    rotate_op = _reuse_xform_op(xform, "RotateXYZ")
+    scale_op = _reuse_xform_op(xform, "Scale")
 
     for entry in samples:
         t = float(entry["time"])
