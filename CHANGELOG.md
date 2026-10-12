@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.11.0](https://github.com/dcc-mcp/dcc-mcp-openusd/compare/v0.10.0...v0.11.0) (2026-10-12)
+
+
+### Features
+
+* author typed mesh UVs and Preview Surface textures ([2d8ffd2](https://github.com/dcc-mcp/dcc-mcp-openusd/commit/2d8ffd24e266228c8b625c01f3d6a1292099a5af))
+
+
+### Bug Fixes
+
+* keep parent-directory texture assets portable ([10df1a6](https://github.com/dcc-mcp/dcc-mcp-openusd/commit/10df1a6c36d45a1b22cef201853a07c9e7fab8c3))
+* preserve typed stage and material skill schemas ([6e06fae](https://github.com/dcc-mcp/dcc-mcp-openusd/commit/6e06fae1e8d096fd381a5c96b324fbd05aefa04c))
+* respect millimeter camera inputs across stage units ([d0886f6](https://github.com/dcc-mcp/dcc-mcp-openusd/commit/d0886f6956cb01ed2b5b10c8ae82fdfe4da65f71))
+* reuse existing USD transform operations during edits ([660d5c2](https://github.com/dcc-mcp/dcc-mcp-openusd/commit/660d5c25e1d091557b75257d066f4380ae580c85))
+
+
+### Documentation
+
+* **readme:** add the generated DCC-MCP host matrix pointer ([#63](https://github.com/dcc-mcp/dcc-mcp-openusd/issues/63)) ([ac5504c](https://github.com/dcc-mcp/dcc-mcp-openusd/commit/ac5504c6fb75474c640793528ab7f4de31fb8388))
+* refresh the generated DCC-MCP host matrix pointer ([#66](https://github.com/dcc-mcp/dcc-mcp-openusd/issues/66)) ([509654b](https://github.com/dcc-mcp/dcc-mcp-openusd/commit/509654b66d72b79d92e292b1f8a0ad1025ffb409))
+
 ## [0.10.0](https://github.com/dcc-mcp/dcc-mcp-openusd/compare/v0.9.0...v0.10.0) (2026-09-28)
 
 
