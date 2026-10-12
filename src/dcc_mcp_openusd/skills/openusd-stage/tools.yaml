@@ -393,7 +393,10 @@ tools:
     enforce_thread_affinity: true
     timeout_hint_secs: 60
     side_effects:
-      - rewrites the reference asset path of the target prim in the root layer
+      modifies: true
+      file_output: true
+      targets:
+        - root layer reference asset paths
     produces:
       - repaired_reference
     risk: low

@@ -161,7 +161,10 @@ tools:
     enforce_thread_affinity: true
     timeout_hint_secs: 30
     side_effects:
-      - binds a material to the target prim when apply is true
+      modifies: true
+      file_output: true
+      targets:
+        - target prim material binding when apply is true
     produces:
       - material_binding
       - binding_suggestions
