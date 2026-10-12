@@ -2534,6 +2534,100 @@ def create_mesh(
     }
 
 
+def _texcoord_name(name: str) -> str:
+    """Keep primvar names unprefixed, with valid USD namespace components."""
+    from pxr import Sdf  # type: ignore
+
+    if (
+        not isinstance(name, str)
+        or name.startswith("primvars:")
+        or name.split(":")[-1] == "indices"
+        or not Sdf.Path.IsValidNamespacedIdentifier(name)
+    ):
+        raise OpenUsdError("Texture coordinate name must be a valid unprefixed primvar name, e.g. st")
+    return name
+
+
+def set_mesh_uvs(
+    stage_file: str,
+    prim_path: str,
+    uvs: List[List[float]],
+    interpolation: str = "faceVarying",
+    indices: Optional[List[int]] = None,
+    primvar_name: str = "st",
+) -> Dict[str, Any]:
+    """Author static float2 texture coordinates on an existing polygon mesh."""
+    _require_pxr()
+    from pxr import Gf, Sdf, UsdGeom, Vt  # type: ignore
+
+    path = _existing_file(stage_file)
+    prim_path = _normalize_prim_path(prim_path)
+    primvar_name = _texcoord_name(primvar_name)
+    if interpolation not in {"faceVarying", "vertex"}:
+        raise OpenUsdError("interpolation must be faceVarying or vertex")
+    if not uvs:
+        raise OpenUsdError("uvs must contain at least one coordinate")
+    values = []
+    for value in uvs:
+        if not isinstance(value, (list, tuple)) or len(value) != 2:
+            raise OpenUsdError("Each UV must contain exactly two finite numbers")
+        if any(
+            isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) or abs(v) > 3.4028234e38
+            for v in value
+        ):
+            raise OpenUsdError("Each UV must contain exactly two finite float32 numbers")
+        values.append(Gf.Vec2f(*value))
+    stage = _open_stage(path)
+    mesh = UsdGeom.Mesh.Get(stage, prim_path)
+    if not mesh:
+        raise OpenUsdError(f"Mesh not found: {prim_path}")
+    points = mesh.GetPointsAttr().Get()
+    counts = mesh.GetFaceVertexCountsAttr().Get()
+    topology = mesh.GetFaceVertexIndicesAttr().Get()
+    if points is None or counts is None or topology is None:
+        raise OpenUsdError("Mesh must have default-time points and topology")
+    valid, reason = UsdGeom.Mesh.ValidateTopology(topology, counts, len(points))
+    if not valid:
+        raise OpenUsdError(f"Invalid mesh topology: {reason}")
+    expected = sum(counts) if interpolation == "faceVarying" else len(points)
+    if indices is None:
+        if len(values) != expected:
+            raise OpenUsdError(f"uvs must contain {expected} values for {interpolation} interpolation")
+    else:
+        if len(indices) != expected:
+            raise OpenUsdError(f"indices must contain {expected} values for {interpolation} interpolation")
+        if any(type(index) is not int or not 0 <= index < len(values) for index in indices):
+            raise OpenUsdError("indices must contain integer indices within the UV array")
+    api = UsdGeom.PrimvarsAPI(mesh)
+    existing = api.GetPrimvar(primvar_name)
+    if existing:
+        if existing.GetTypeName() != Sdf.ValueTypeNames.TexCoord2fArray:
+            raise OpenUsdError(f"Existing primvar {primvar_name} is not texCoord2f[]")
+        if existing.GetAttr().GetNumTimeSamples() or existing.GetIndicesAttr().GetNumTimeSamples():
+            raise OpenUsdError("Animated UV primvars are not supported by this default-time tool")
+    pv = api.CreatePrimvar(primvar_name, Sdf.ValueTypeNames.TexCoord2fArray, interpolation)
+    pv.SetElementSize(1)
+    pv.Set(Vt.Vec2fArray(values))
+    if indices is None:
+        # A clear would expose weaker-layer indices. A block also covers shot overrides.
+        pv.BlockIndices()
+    else:
+        pv.SetIndices(Vt.IntArray(indices))
+    if len(pv.ComputeFlattened()) != expected:
+        raise OpenUsdError("Authored UVs did not resolve to the expected topology size")
+    stage.GetRootLayer().Save()
+    return {
+        "stage_file": str(path),
+        "prim_path": prim_path,
+        "primvar_name": primvar_name,
+        "interpolation": interpolation,
+        "uv_count": len(values),
+        "element_count": expected,
+        "indexed": indices is not None,
+        "runtime": "pxr",
+    }
+
+
 # --- openusd-material -------------------------------------------------------
 
 
@@ -2610,6 +2704,149 @@ def create_preview_surface(
         "stage_file": str(path),
         "material_path": material_path,
         "shader_path": shader_path,
+        "runtime": "pxr",
+    }
+
+
+def connect_preview_surface_texture(
+    stage_file: str,
+    material_path: str,
+    texture_file: str,
+    input_name: str = "diffuseColor",
+    channel: Optional[str] = None,
+    source_color_space: Optional[str] = None,
+    texcoord_name: str = "st",
+    shader_path: Optional[str] = None,
+    wrap_s: str = "repeat",
+    wrap_t: str = "repeat",
+) -> Dict[str, Any]:
+    """Connect a portable UV texture network to an existing Preview Surface."""
+    _require_pxr()
+    from pxr import Gf, Sdf, UsdShade  # type: ignore
+
+    path = _existing_file(stage_file)
+    material_path = _normalize_prim_path(material_path)
+    texcoord_name = _texcoord_name(texcoord_name)
+    colors = {"diffuseColor", "emissiveColor"}
+    scalars = {"roughness", "metallic", "opacity", "clearcoat", "clearcoatRoughness", "occlusion"}
+    if input_name not in colors | scalars | {"normal"}:
+        raise OpenUsdError("Unsupported Preview Surface texture input: " + input_name)
+    vector = input_name in colors or input_name == "normal"
+    channel = channel if channel is not None else ("rgb" if vector else "r")
+    if channel not in ({"rgb"} if vector else {"r", "g", "b", "a"}):
+        raise OpenUsdError("Color/normal inputs require rgb; scalar inputs require r, g, b, or a")
+    source_color_space = (
+        source_color_space if source_color_space is not None else ("sRGB" if input_name in colors else "raw")
+    )
+    if source_color_space not in {"sRGB", "raw", "auto"}:
+        raise OpenUsdError("source_color_space must be sRGB, raw, or auto")
+    if input_name == "normal" and source_color_space != "raw":
+        raise OpenUsdError("Normal textures require raw source_color_space")
+    wraps = {"black", "clamp", "repeat", "mirror", "useMetadata"}
+    if wrap_s not in wraps or wrap_t not in wraps:
+        raise OpenUsdError("wrap_s and wrap_t must be black, clamp, repeat, mirror, or useMetadata")
+    texture = Path(texture_file).expanduser()
+    if not texture.is_absolute():
+        texture = path.parent / texture
+    texture = texture.resolve()
+    if not texture.is_file():
+        raise OpenUsdError(f"Texture file does not exist: {texture}")
+    asset_path = _relative_asset_path(path.parent, texture)
+    stage = _open_stage(path)
+    material = UsdShade.Material.Get(stage, material_path)
+    if not material:
+        raise OpenUsdError(f"Material not found: {material_path}")
+    if shader_path is None:
+        source = material.ComputeSurfaceSource()
+        shader_path = str(source[0].GetPath()) if source and source[0] else f"{material_path}/Shader"
+    shader_path = _normalize_prim_path(shader_path)
+    shader = UsdShade.Shader.Get(stage, shader_path)
+    if (
+        not Sdf.Path(shader_path).HasPrefix(material.GetPath())
+        or not shader
+        or shader.GetIdAttr().Get() != "UsdPreviewSurface"
+    ):
+        raise OpenUsdError("shader_path must name an existing UsdPreviewSurface inside the material")
+    texture_path = f"{shader_path}_{input_name}Texture"
+    reader_path = f"{shader_path}_{input_name}Primvar"
+    target_type = (
+        Sdf.ValueTypeNames.Color3f
+        if input_name in colors
+        else (Sdf.ValueTypeNames.Normal3f if input_name == "normal" else Sdf.ValueTypeNames.Float)
+    )
+    target = shader.GetInput(input_name)
+    if target and target.GetTypeName() != target_type:
+        raise OpenUsdError(f"Existing input {input_name} has an incompatible type")
+    # Do not replace unrelated pre-existing nodes or incompatible properties.
+    node_specs = [
+        (
+            texture_path,
+            "UsdUVTexture",
+            {
+                "file": Sdf.ValueTypeNames.Asset,
+                "st": Sdf.ValueTypeNames.Float2,
+                "sourceColorSpace": Sdf.ValueTypeNames.Token,
+                "wrapS": Sdf.ValueTypeNames.Token,
+                "wrapT": Sdf.ValueTypeNames.Token,
+                "scale": Sdf.ValueTypeNames.Float4,
+                "bias": Sdf.ValueTypeNames.Float4,
+            },
+        ),
+        (reader_path, "UsdPrimvarReader_float2", {"varname": Sdf.ValueTypeNames.String}),
+    ]
+    for node_path, identifier, inputs in node_specs:
+        prim = stage.GetPrimAtPath(node_path)
+        if not prim:
+            continue
+        node = UsdShade.Shader(prim)
+        if not node or node.GetIdAttr().Get() != identifier:
+            raise OpenUsdError(f"Incompatible prim already exists: {node_path}")
+        for name, value_type in inputs.items():
+            existing = node.GetInput(name)
+            if existing and (
+                existing.GetTypeName() != value_type
+                or existing.GetAttr().GetNumTimeSamples()
+                or (name != "st" and existing.GetAttr().GetConnections())
+            ):
+                raise OpenUsdError(f"Incompatible or animated input already exists: {node_path}.inputs:{name}")
+    for node_path, name, value_type in [
+        (reader_path, "result", Sdf.ValueTypeNames.Float2),
+        (texture_path, channel, Sdf.ValueTypeNames.Float3 if vector else Sdf.ValueTypeNames.Float),
+    ]:
+        node = UsdShade.Shader.Get(stage, node_path)
+        existing = node.GetOutput(name) if node else None
+        if existing and (existing.GetTypeName() != value_type or existing.GetAttr().GetConnections()):
+            raise OpenUsdError(f"Incompatible output already exists: {node_path}.outputs:{name}")
+    reader = UsdShade.Shader.Define(stage, reader_path)
+    reader.CreateIdAttr("UsdPrimvarReader_float2")
+    reader.CreateInput("varname", Sdf.ValueTypeNames.String).Set(texcoord_name)
+    reader_output = reader.CreateOutput("result", Sdf.ValueTypeNames.Float2)
+    tex = UsdShade.Shader.Define(stage, texture_path)
+    tex.CreateIdAttr("UsdUVTexture")
+    tex.CreateInput("file", Sdf.ValueTypeNames.Asset).Set(Sdf.AssetPath(asset_path))
+    tex.CreateInput("sourceColorSpace", Sdf.ValueTypeNames.Token).Set(source_color_space)
+    tex.CreateInput("wrapS", Sdf.ValueTypeNames.Token).Set(wrap_s)
+    tex.CreateInput("wrapT", Sdf.ValueTypeNames.Token).Set(wrap_t)
+    normal = input_name == "normal"
+    tex.CreateInput("scale", Sdf.ValueTypeNames.Float4).Set(Gf.Vec4f(2, 2, 2, 1) if normal else Gf.Vec4f(1))
+    tex.CreateInput("bias", Sdf.ValueTypeNames.Float4).Set(Gf.Vec4f(-1, -1, -1, 0) if normal else Gf.Vec4f(0))
+    if not tex.CreateInput("st", Sdf.ValueTypeNames.Float2).ConnectToSource(reader_output):
+        raise OpenUsdError("Could not connect texture coordinates")
+    output = tex.CreateOutput(channel, Sdf.ValueTypeNames.Float3 if vector else Sdf.ValueTypeNames.Float)
+    if not shader.CreateInput(input_name, target_type).ConnectToSource(output):
+        raise OpenUsdError("Could not connect texture to Preview Surface")
+    stage.GetRootLayer().Save()
+    return {
+        "stage_file": str(path),
+        "material_path": material_path,
+        "shader_path": shader_path,
+        "texture_path": texture_path,
+        "primvar_reader_path": reader_path,
+        "texture_asset_path": asset_path,
+        "input_name": input_name,
+        "channel": channel,
+        "source_color_space": source_color_space,
+        "texcoord_name": texcoord_name,
         "runtime": "pxr",
     }
 

@@ -11,7 +11,7 @@ metadata:
     dcc: openusd
     version: "0.1.0"
     layer: domain
-    search-hint: "openusd usd material shader PBR metallic roughness emissive clearcoat previewSurface bind UsdShade suggest unbound dangling binding fix"
+    search-hint: "openusd usd material shader PBR metallic roughness emissive clearcoat previewSurface texture UV normal map sRGB raw bind UsdShade suggest unbound dangling binding fix"
     tags: "openusd, usd, material, shader, pbr, metallic, roughness, emissive, preview-surface, binding, suggest, unbound, dangling"
     tools: tools.yaml
 ---
@@ -77,3 +77,27 @@ suggest_material_bind(stage_file, prim_path, material_path, apply=true)
 Without pxr the call fails with `material_bind_failed` and a
 `possible_solutions` entry rather than reporting a success it did not earn.
 `apply=true` also requires both `prim_path` and `material_path`.
+
+## `connect_preview_surface_texture`
+
+Connect an existing local texture to an existing Preview Surface through
+`UsdUVTexture` and `UsdPrimvarReader_float2`. Relative `texture_file` inputs
+resolve against the stage directory; the root layer stores a relative asset
+path where possible. No files are copied or baked. Create matching mesh UVs
+with `openusd_stage__set_mesh_uvs` first.
+
+Color inputs default to `rgb`/`sRGB`; scalar data defaults to `r`/`raw` and
+accepts `r`, `g`, `b`, or `a`. `normal` requires `rgb`/`raw` and assumes an
+unsigned [0,1] tangent-space map, applying scale 2 and bias -1. Signed normal
+maps, UDIM patterns, and arbitrary shader graphs are outside this helper.
+
+Repeated calls reuse two reserved sibling paths for each shader/input,
+`<shader>_<input>Texture` and `<shader>_<input>Primvar`. Other input connections
+and source layers remain unchanged. Incompatible nodes/properties or animated
+configuration inputs fail before saving. `shader_path` optionally chooses an
+existing Preview Surface inside the material; the surface output is not
+rewired. Move the project with its textures or use native USDZ packaging.
+
+中文：连接标准颜色、粗糙度、金属度、透明度、清漆、遮蔽及法线纹理。相对路径以
+舞台目录为基准；需要匹配的网格 UV。重复调用更新当前根层中的专用节点，不会修改
+源资产层。原生数据可移植不代表不同渲染器的画面完全一致。
