@@ -168,6 +168,18 @@ Both fix skills run on the shared facts, so they agree with the validator on
 every runtime, and both read back what they write instead of claiming a fix
 that did not happen. Reporting needs no pxr; applying a material binding does.
 
+## Portable textured materials / 可移植纹理材质
+
+`set_mesh_uvs` authors static indexed or non-indexed mesh texture coordinates.
+`connect_preview_surface_texture` connects standard UV textures for color,
+roughness, metalness, opacity, clearcoat, occlusion, and tangent-space normals.
+Both require pxr and preserve relative texture asset paths. See the
+[English / 中文 guide](docs/uv-textures.md) for typed arguments, layer behavior,
+packaging, and renderer boundaries.
+
+两个新 typed 工具支持网格 UV 和标准 Preview Surface 纹理连接；相对资源路径、
+索引 UV 与保存重开均有原生测试。详细用法及限制见上述双语说明。
+
 ## Run
 
 ```bash

@@ -14,7 +14,7 @@ metadata:
     dcc: openusd
     version: "0.1.0"
     layer: domain
-    search-hint: "openusd usd stage create list prim define xform reference mesh polygon points particles fx asset scene.usda broken unresolved fix repair"
+    search-hint: "openusd usd stage create list prim define xform reference mesh polygon uv texcoord texture indexed faceVarying points particles fx asset scene.usda broken unresolved fix repair"
     tags: "openusd, usd, stage, prims, references, mesh, polygon, points, particles, fx, fix, unresolved, repair"
     tools: tools.yaml
 ---
@@ -85,3 +85,16 @@ inspected. A binary layer without `pxr`, a layer that failed to open, or a file
 that is not a USD layer all produce empty facts, which would otherwise be
 indistinguishable from a healthy stage — those cases fail with `status=
 "failed"` instead, so the tool never asserts a file it could not read is clean.
+
+## `set_mesh_uvs`
+
+Author static `texCoord2f[]` UVs on an existing mesh with default-time topology.
+Use `faceVarying` for one element per face corner or `vertex` for one per point.
+Optional indices must match that element count and address the UV array.
+Omitting indices blocks any old/weak-layer indices. Animated UVs and
+incompatible types fail before saving. The root layer receives the edits;
+source layers stay unchanged. Match `primvar_name` (default `st`, no
+`primvars:` prefix) with the material tool's `texcoord_name`. Requires pxr.
+
+中文：为现有网格写入静态 UV，支持面角/顶点插值及索引。省略索引会阻断旧索引，
+不会误用弱层数据；仅修改当前根层。UV 名称需与纹理读取节点相同。
