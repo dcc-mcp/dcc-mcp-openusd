@@ -269,3 +269,25 @@ def test_custom_uv_set_and_shader_keep_existing_material_connection(scene):
     reader = UsdShade.Shader.Get(stage, result["primvar_reader_path"])
     assert reader.GetInput("varname").Get() == "detailUV"
     assert UsdGeom.PrimvarsAPI(stage.GetPrimAtPath(MESH)).GetPrimvar("detailUV")
+
+
+@pytest.mark.parametrize("absolute_input", [False, True])
+def test_parent_directory_textures_remain_relative_after_relocation(scene, tmp_path, absolute_input):
+    from pxr import Usd, UsdShade
+
+    source, texture = scene
+    layers = tmp_path / "layers"
+    layers.mkdir()
+    path = layers / "look.usda"
+    shutil.copy2(source, path)
+    texture_arg = str(texture) if absolute_input else "../textures/color.png"
+    result = rt.connect_preview_surface_texture(str(path), MAT, texture_arg)
+    assert result["texture_asset_path"] == "../textures/color.png"
+    relocated = tmp_path / "relocated_project"
+    relocated.mkdir()
+    shutil.copytree(layers, relocated / "layers")
+    shutil.copytree(texture.parent, relocated / "textures")
+    stage = Usd.Stage.Open(str(relocated / "layers" / "look.usda"))
+    asset = UsdShade.Shader.Get(stage, result["texture_path"]).GetInput("file").Get()
+    assert asset.path == "../textures/color.png"
+    assert asset.resolvedPath == str(relocated / "textures" / "color.png")

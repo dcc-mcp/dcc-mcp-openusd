@@ -2751,7 +2751,11 @@ def connect_preview_surface_texture(
     texture = texture.resolve()
     if not texture.is_file():
         raise OpenUsdError(f"Texture file does not exist: {texture}")
-    asset_path = _relative_asset_path(path.parent, texture)
+    # Unlike Path.relative_to, relpath also preserves sibling/parent texture assets.
+    try:
+        asset_path = Path(os.path.relpath(str(texture), str(path.parent))).as_posix()
+    except ValueError:  # Different Windows drives have no relative representation.
+        asset_path = texture.as_posix()
     stage = _open_stage(path)
     material = UsdShade.Material.Get(stage, material_path)
     if not material:
