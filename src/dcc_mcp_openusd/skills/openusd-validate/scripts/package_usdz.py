@@ -9,7 +9,13 @@ from dcc_mcp_openusd.runtime import package_usdz
 
 @skill_entry
 def main(**kwargs) -> dict:
-    return skill_success("OpenUSD package created", **package_usdz(**kwargs))
+    result = package_usdz(**kwargs)
+    message = (
+        "OpenUSD package created; dependencies resolved"
+        if result["runtime"] == "pxr"
+        else "Root-only ZIP created; native dependency checks unavailable"
+    )
+    return skill_success(message, **result)
 
 
 if __name__ == "__main__":

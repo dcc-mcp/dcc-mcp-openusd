@@ -1,6 +1,6 @@
 tools:
   - name: validate_stage
-    description: Validate stage metadata and basic OpenUSD invariants.
+    description: Validate root-layer invariants; with pxr also check composed VDB fields and PointInstancer arrays.
     input_schema:
       type: object
       required: [stage_file]
@@ -24,7 +24,7 @@ tools:
       idempotent_hint: true
 
   - name: package_usdz
-    description: Package a stage into a USDZ-style archive.
+    description: Package a stage with native dependency checks; no-pxr fallback is an unchecked root-only ZIP.
     input_schema:
       type: object
       required: [stage_file, output_file]
