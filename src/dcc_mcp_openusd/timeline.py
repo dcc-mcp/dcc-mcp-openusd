@@ -483,6 +483,14 @@ def import_timeline(
     (1001 is a hard convention in many VFX pipelines) instead of overwriting it
     and restoring it by hand afterwards; the end time code shifts with it so
     the shot keeps its duration and only its base moves.
+
+    Because the base resets to 1 whenever *start_time_code* is absent, the
+    argument has to be repeated on every call, not just the first one. This
+    matters for the documented ``on-failure`` retry: ``verify_timeline_parity``
+    suggests this function as its follow-up, and a ``next-tools`` suggestion
+    carries a tool name with no argument values, so a retry taken from it
+    re-runs the import unanchored and moves a 1001..1084 shot back to 1..84
+    without raising anything.
     """
     require_otio("Importing an OTIO timeline")
     path = _stage_path(stage_file)

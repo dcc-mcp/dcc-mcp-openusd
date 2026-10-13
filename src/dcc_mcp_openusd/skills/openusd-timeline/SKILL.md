@@ -51,6 +51,30 @@ endTimeCode   = startTimeCode + duration_frames - 1
 A 84-frame timeline at 24 fps with `global_start_time = 0` therefore becomes
 `startTimeCode = 1`, `endTimeCode = 84`.
 
+## Retrying after a parity failure
+
+`verify_timeline_parity` offers `import_timeline` as its `on-failure`
+follow-up so a failed assertion can be repaired by re-applying the edit.
+`next-tools` carries **tool names only** — dcc-mcp-core does not interpolate
+argument values into a suggested call. A retry taken straight from that
+suggestion therefore runs `import_timeline` without `start_time_code`, which
+resets an anchored shot to a 1-based range:
+
+```text
+anchored  1001..1084   ──on-failure retry (no start_time_code)──▶  1..84
+```
+
+This is silent — no warning is raised and the parity result is not invalidated,
+because the retry produced a self-consistent stage, just on the wrong base.
+
+Always re-supply `start_time_code` when retrying an anchored import:
+
+```bash
+# not: import_timeline(stage_file, otio_file)              # resets to 1..84
+dcc-mcp-cli call openusd_timeline__import_timeline \
+  stage_file=shot.usda otio_file=shot.otio start_time_code=1001
+```
+
 ## Workflow
 
 1. Ensure a stage exists.

@@ -4,7 +4,13 @@ tools:
       Apply an OpenTimelineIO timeline to a stage. Sets startTimeCode,
       endTimeCode and timeCodesPerSecond from the timeline and authors the
       track/clip/gap structure under the timeline prim so it can be exported
-      again. Requires the optional opentimelineio package.
+      again. Requires the optional opentimelineio package. Without
+      start_time_code the time codes follow the 0-based to 1-based conversion,
+      which resets an anchored shot to a 1-based range: via next-tools this
+      tool is offered as the on-failure retry of verify_timeline_parity, and
+      that suggestion carries no arguments, so an anchored 1001..1084 shot
+      becomes 1..84 when the retry is followed verbatim. Re-supply
+      start_time_code on every retry.
     input_schema:
       type: object
       required: [stage_file]
@@ -38,7 +44,9 @@ tools:
           description: >-
             Anchor the shot on this start time code instead of the value the
             0-based to 1-based conversion derives. Use it to keep a 1001 (or
-            other) pipeline base; the end time code shifts with it.
+            other) pipeline base; the end time code shifts with it. Omitting it
+            resets the shot to a 1-based range, so it must be passed again on
+            every retry of an anchored import.
     read_only: false
     destructive: false
     idempotent: true
@@ -107,7 +115,10 @@ tools:
       track count, clip count, total frames, clip names, in-points, durations,
       positions and the derived time codes are compared field by field.
       Without one the stage's own export is re-read and compared to itself.
-      Requires the optional opentimelineio package.
+      Requires the optional opentimelineio package. On failure this tool
+      suggests import_timeline as a retry; that suggestion carries no
+      arguments, so following it drops an anchored start_time_code and resets
+      the shot to a 1-based range. Re-supply start_time_code on the retry.
     input_schema:
       type: object
       required: [stage_file]
@@ -159,3 +170,18 @@ tools:
       on-failure:
         - openusd_timeline__import_timeline
         - openusd_animation__set_time_codes
+    # next-tools carries tool names only — dcc-mcp-core does not interpolate
+    # argument values into a suggested follow-up call. Retrying
+    # openusd_timeline__import_timeline from this binding therefore re-runs it
+    # without start_time_code, which resets an anchored shot to a 1-based range
+    # (1001..1084 becomes 1..84) silently. Callers must re-supply
+    # start_time_code themselves when following this suggestion.
+    next-tools-notes:
+      on-failure:
+        openusd_timeline__import_timeline: >-
+          Resets the time code base: re-running it without start_time_code
+          moves an anchored shot back to a 1-based range. Re-supply the
+          start_time_code used for the original import.
+        openusd_animation__set_time_codes: >-
+          Repair path: re-asserts startTimeCode/endTimeCode directly, so it
+          can restore a lost 1001 base but does not itself re-run the import.
