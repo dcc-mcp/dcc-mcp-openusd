@@ -101,3 +101,10 @@ rewired. Move the project with its textures or use native USDZ packaging.
 中文：连接标准颜色、粗糙度、金属度、透明度、清漆、遮蔽及法线纹理。相对路径以
 舞台目录为基准；需要匹配的网格 UV。重复调用更新当前根层中的专用节点，不会修改
 源资产层。原生数据可移植不代表不同渲染器的画面完全一致。
+
+## Blender consumer handoff
+
+For PointInstancer prototypes or primvar-driven materials consumed by Blender,
+read [the Blender handoff recipe](../recipes/blender-consumer-handoff.md).
+It records version-specific importer limits and opt-in authoring workarounds;
+these are not native USD validity rules.
