@@ -1,0 +1,123 @@
+#usda 1.0
+(
+    defaultPrim = "World"
+    metersPerUnit = 1
+    upAxis = "Z"
+)
+
+def Xform "World"
+{
+    def Material "Green"
+    {
+        token outputs:surface.connect = </World/Green/Surface.outputs:surface>
+
+        def Shader "Surface"
+        {
+            uniform token info:id = "UsdPreviewSurface"
+            color3f inputs:diffuseColor = (0.08, 0.35, 0.025)
+            float inputs:roughness = 0.8
+            token outputs:surface
+        }
+    }
+
+    def Material "Orange"
+    {
+        token outputs:surface.connect = </World/Orange/Surface.outputs:surface>
+
+        def Shader "Surface"
+        {
+            uniform token info:id = "UsdPreviewSurface"
+            color3f inputs:diffuseColor = (0.5, 0.08, 0.02)
+            float inputs:roughness = 0.8
+            token outputs:surface
+        }
+    }
+
+    def "UntypedContainer"
+    {
+        def PointInstancer "Instancer"
+        {
+            quath[] orientations = [(1, 0, 0, 0), (0.707031, 0, 0, 0.707031), (1, 0, 0, 0)]
+            point3f[] positions = [(-0.58, -0.55, 0), (-0.58, 0, 0), (-0.58, 0.55, 0)]
+            int[] protoIndices = [0, 1, 0]
+            rel prototypes = [
+                </World/UntypedContainer/Instancer/Prototypes/P0>,
+                </World/UntypedContainer/Instancer/Prototypes/P1>,
+            ]
+            float3[] scales = [(1, 1, 1), (0.55, 1.3, 1), (1.25, 0.6, 1.5)]
+
+            def Scope "Prototypes"
+            {
+                def Mesh "P0" (
+                    prepend apiSchemas = ["MaterialBindingAPI"]
+                )
+                {
+                    uniform bool doubleSided = 1
+                    float3[] extent = [(-0.1, -0.06, 0), (0.16, 0.1, 0.08)]
+                    int[] faceVertexCounts = [3, 3, 3, 3]
+                    int[] faceVertexIndices = [0, 2, 1, 0, 1, 3, 1, 2, 3, 2, 0, 3]
+                    rel material:binding = </World/Green>
+                    point3f[] points = [(-0.1, -0.06, 0), (0.16, -0.06, 0), (-0.1, 0.1, 0), (-0.07, -0.04, 0.08)]
+                    uniform token subdivisionScheme = "none"
+                }
+
+                def Mesh "P1" (
+                    prepend apiSchemas = ["MaterialBindingAPI"]
+                )
+                {
+                    uniform bool doubleSided = 1
+                    float3[] extent = [(-0.1, -0.06, 0), (0.16, 0.1, 0.08)]
+                    int[] faceVertexCounts = [3, 3, 3, 3]
+                    int[] faceVertexIndices = [0, 2, 1, 0, 1, 3, 1, 2, 3, 2, 0, 3]
+                    rel material:binding = </World/Orange>
+                    point3f[] points = [(-0.1, -0.06, 0), (0.16, -0.06, 0), (-0.1, 0.1, 0), (-0.07, -0.04, 0.08)]
+                    uniform token subdivisionScheme = "none"
+                }
+            }
+        }
+    }
+
+    def Scope "TypedScope"
+    {
+        def PointInstancer "Instancer"
+        {
+            quath[] orientations = [(1, 0, 0, 0), (0.707031, 0, 0, 0.707031), (1, 0, 0, 0)]
+            point3f[] positions = [(0.58, -0.55, 0), (0.58, 0, 0), (0.58, 0.55, 0)]
+            int[] protoIndices = [0, 1, 0]
+            rel prototypes = [
+                </World/TypedScope/Instancer/Prototypes/P0>,
+                </World/TypedScope/Instancer/Prototypes/P1>,
+            ]
+            float3[] scales = [(1, 1, 1), (0.55, 1.3, 1), (1.25, 0.6, 1.5)]
+
+            def Scope "Prototypes"
+            {
+                def Mesh "P0" (
+                    prepend apiSchemas = ["MaterialBindingAPI"]
+                )
+                {
+                    uniform bool doubleSided = 1
+                    float3[] extent = [(-0.1, -0.06, 0), (0.16, 0.1, 0.08)]
+                    int[] faceVertexCounts = [3, 3, 3, 3]
+                    int[] faceVertexIndices = [0, 2, 1, 0, 1, 3, 1, 2, 3, 2, 0, 3]
+                    rel material:binding = </World/Green>
+                    point3f[] points = [(-0.1, -0.06, 0), (0.16, -0.06, 0), (-0.1, 0.1, 0), (-0.07, -0.04, 0.08)]
+                    uniform token subdivisionScheme = "none"
+                }
+
+                def Mesh "P1" (
+                    prepend apiSchemas = ["MaterialBindingAPI"]
+                )
+                {
+                    uniform bool doubleSided = 1
+                    float3[] extent = [(-0.1, -0.06, 0), (0.16, 0.1, 0.08)]
+                    int[] faceVertexCounts = [3, 3, 3, 3]
+                    int[] faceVertexIndices = [0, 2, 1, 0, 1, 3, 1, 2, 3, 2, 0, 3]
+                    rel material:binding = </World/Orange>
+                    point3f[] points = [(-0.1, -0.06, 0), (0.16, -0.06, 0), (-0.1, 0.1, 0), (-0.07, -0.04, 0.08)]
+                    uniform token subdivisionScheme = "none"
+                }
+            }
+        }
+    }
+}

@@ -29,3 +29,10 @@ Reference arcs remain in `openusd-stage`. Requires the pxr OpenUSD runtime.
 3. `add_payload` — attach a payload arc on a prim.
 4. `add_variant_set` — create a named variant set on a prim.
 5. `set_variant_selection` — switch the active variant in a variant set.
+
+## Blender consumer handoff
+
+For PointInstancer prototypes or primvar-driven materials consumed by Blender,
+read [the Blender handoff recipe](../recipes/blender-consumer-handoff.md).
+It records version-specific importer limits and opt-in authoring workarounds;
+these are not native USD validity rules.
