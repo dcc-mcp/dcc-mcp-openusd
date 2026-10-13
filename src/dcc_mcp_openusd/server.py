@@ -171,6 +171,13 @@ class OpenUsdMcpServer(DccServerBase):
 
     def start(self, *, install_atexit_hook: bool = True) -> "OpenUsdMcpServer":
         """Start the MCP HTTP server and return ``self``."""
+        # Initialize optional native OTIO bindings on the startup thread before
+        # Rust HTTP workers invoke timeline tools. First importing OTIO inside
+        # a worker can abort on a later callback (observed with OTIO 0.18.1).
+        # Detection is lazy and missing OTIO remains a supported base install.
+        from dcc_mcp_openusd.timeline import detect_otio
+
+        detect_otio()
         super().start(install_atexit_hook=install_atexit_hook)
         return self
 

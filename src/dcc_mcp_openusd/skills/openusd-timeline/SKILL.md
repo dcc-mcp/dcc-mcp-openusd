@@ -90,3 +90,11 @@ names, clip in-points, clip durations, clip positions, and the derived
 `startTimeCode` / `endTimeCode` are compared field by field. Exported OTIO is
 always re-read through `opentimelineio` before it is reported, so a payload
 that cannot be read back fails instead of being handed on.
+
+## Native runtime initialization
+
+The server detects the optional OTIO runtime on its startup thread before
+accepting tool calls. This avoids a native OTIO 0.18.1 crash observed when the
+first import happened inside a gateway worker and a later call deserialized a
+timeline. OTIO remains optional; the base install still reports a clear missing
+runtime error when a timeline tool is requested without it.
