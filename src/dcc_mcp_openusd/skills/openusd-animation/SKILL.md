@@ -30,3 +30,16 @@ OpenUSD runtime.
 2. `set_time_codes` — configure start/end frame and FPS on the stage.
 3. `author_xform_samples` — write translate/rotate/scale samples at specific times.
 4. `author_attribute_samples` — write arbitrary attribute time samples.
+
+## Attribute values over JSON
+
+`author_attribute_samples` uses the existing USD attribute type. Scalar Gf
+vectors (2, 3, or 4 components, including color/normal/texcoord aliases)
+accept JSON arrays of the exact dimension. Components must be finite numbers;
+integer vectors require integers, and booleans are rejected. Existing
+array-of-vector attributes such as `points` continue to accept nested arrays.
+Native Python values retain USD's existing conversion rules, including
+cross-precision Gf vectors. JSON vectors are validated across the batch before
+samples are authored; this is not a transaction for other USD authoring errors.
+A missing custom attribute still defaults to Float. This does not add generic
+relationship, API-schema, quaternion, matrix, or static-default authoring.
