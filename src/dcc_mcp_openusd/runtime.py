@@ -572,7 +572,11 @@ def _collect_stage_facts(path: Path) -> Tuple[_StageFacts, str]:
         layer_chain=chain,
         header_ok=bool(root_meta.get("header_ok")),
         binary_layer=bool(root_meta.get("binary")),
+        open_error=root_meta.get("open_error"),
     )
+
+    if facts.open_error:
+        return facts, "pxr" if detect_runtime().has_pxr else "text-fallback"
 
     runtime = "text-fallback"
     if detect_runtime().has_pxr:
@@ -826,12 +830,16 @@ def _run_validators(facts: _StageFacts, strict: bool) -> List[Dict[str, Any]]:
 
     if facts.open_error:
         add("STAGE_OPEN_FAILED", f"Stage could not be opened: {facts.open_error}", stage_layer)
-    if facts.binary_layer:
+        if facts.binary_layer or not root_meta.get("available"):
+            # Unreadable metadata is unknown, not evidence of missing fields.
+            return issues
+    if facts.binary_layer and not facts.collected:
         add(
             "BINARY_LAYER_REQUIRES_PXR",
             "Binary USD layer cannot be validated without the pxr package",
             stage_layer,
         )
+        return issues
     elif not facts.header_ok:
         add("INVALID_STAGE_HEADER", "Stage does not start with a #usda header", line_location(1))
 
@@ -2244,7 +2252,8 @@ def _read_layer_metadata(path: Path) -> Dict[str, Any]:
     }
     try:
         raw = path.read_bytes()
-    except OSError:
+    except OSError as exc:
+        info["open_error"] = str(exc)
         return info
 
     info["available"] = True
@@ -2258,18 +2267,24 @@ def _read_layer_metadata(path: Path) -> Dict[str, Any]:
             from pxr import Sdf  # type: ignore
 
             layer = Sdf.Layer.FindOrOpen(str(path))
-            if layer is not None:
-                root = Sdf.Path.absoluteRootPath
-                if layer.HasField(root, "upAxis"):
-                    info["up_axis"] = str(layer.upAxis)
-                if layer.HasField(root, "metersPerUnit"):
-                    info["meters_per_unit"] = float(layer.metersPerUnit)
-                if layer.HasField(root, "defaultPrim"):
-                    info["default_prim"] = str(layer.defaultPrim)
-                info["sublayers"] = [str(sub) for sub in layer.subLayerPaths]
-                info["header_ok"] = True
-        except Exception:
+            if layer is None:
+                raise OpenUsdError(f"Could not open stage: {path}")
+            # Layer.HasField is not exposed by the Python bindings. Query the
+            # pseudo-root spec, preserving absent authored metadata (no defaults).
+            root = layer.pseudoRoot
+            if root.HasInfo("upAxis"):
+                info["up_axis"] = str(root.GetInfo("upAxis"))
+            if root.HasInfo("metersPerUnit"):
+                info["meters_per_unit"] = float(root.GetInfo("metersPerUnit"))
+            if root.HasInfo("defaultPrim"):
+                info["default_prim"] = str(root.GetInfo("defaultPrim"))
+            info["sublayers"] = [str(sub) for sub in layer.subLayerPaths]
+            info["header_ok"] = True
+        except ImportError:
+            # A partial pxr install still needs the no-pxr binary diagnostic.
             pass
+        except Exception as exc:
+            info["open_error"] = str(exc)
     return info
 
 
