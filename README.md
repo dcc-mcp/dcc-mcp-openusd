@@ -4,6 +4,28 @@
   <img src="docs/assets/dcc-mcp-openusd.svg" alt="DCC-MCP · OPENUSD" width="600">
 </p>
 
+## Scene gallery · 场景展示
+
+Real renders of USD-authored scenes, from a stylized assembly study to an
+architectural greenhouse. OpenUSD stores and composes the scene; Blender
+imports it and produces the Cycles render.
+
+| Garden Light · architectural study / 写实温室 | Seedlight · stylized assembly / 风格化装配 |
+| --- | --- |
+| ![Garden Light greenhouse with glass, brickwork and original procedural plants](docs/assets/gallery/garden-light.png) | ![Seedlight three-bay conservatory with amber foliage](docs/assets/gallery/seedlight-amber.png) |
+| An approved still with typed UV/texture authoring and CC0 surface/environment assets. | The original modular study: native instances, relative references, a payload and foliage variants. |
+
+Authoring combines typed DCC-MCP calls with explicit native `pxr` steps;
+Blender supplies rendering and final look development. These stills do not
+claim that every Blender shader node round-trips through USD.
+[What was tested, runtime boundaries and image credits](docs/gallery.md).
+
+两图均为真实 USD 场景的 Blender/Cycles 渲染：左为已认可的写实温室单帧，右为
+早期 Seedlight 三联温室技术样例。OpenUSD 负责存储、组合与互换，Blender 负责
+渲染及最终材质调整；原生 pxr 补足步骤不冒称 typed 接口能力。毛发、粒子、体积和
+动力学已有小型数据验证，尚未作为动态渲染作品展示。图片来源与独立于代码许可的
+[媒体权利说明](docs/gallery.md#artwork-rights)见详情。
+
 <!-- dcc-mcp-coverage-pointer:start -->
 <!-- Generated from dcc-mcp-catalog.yml by scripts/generate_adapter_pointer.py in dcc-mcp/dcc-mcp-core. Do not edit by hand. -->
 ## Part of the DCC-MCP host matrix
