@@ -651,3 +651,82 @@ def test_skill_scripts_wire_the_timeline_helpers(tmp_path):
     assert drifted["success"] is False
     assert drifted["error"] == "timeline_parity_mismatch"
     assert drifted["context"]["differences"]
+
+
+@needs_pxr_and_otio
+def test_on_failure_retry_without_the_anchor_resets_the_time_code_base(tmp_path):
+    """The documented on-failure retry drops `start_time_code`.
+
+    `verify_timeline_parity` suggests `import_timeline` as its on-failure
+    follow-up, and the next-tools suggestion carries a tool name with no
+    argument values. Following it verbatim therefore re-runs the import
+    unanchored, which silently moves a 1001..1084 shot back to 1..84.
+
+    This pins that reset as the real, expected behavior — the warning in
+    tools.yaml and SKILL.md exists because the retry cannot carry the anchor
+    over on its own. Anchoring still works, but only when the caller re-supplies
+    `start_time_code` on the retry itself.
+    """
+    from pxr import Usd  # type: ignore
+
+    otio_file = _write_otio(_build_reference_timeline(), tmp_path / "shot.otio")
+    stage_file = tmp_path / "scene.usda"
+    create_stage(str(stage_file), name="shot_001")
+
+    import_timeline(str(stage_file), otio_file=str(otio_file), start_time_code=1001.0)
+    stage = Usd.Stage.Open(str(stage_file))
+    assert (stage.GetStartTimeCode(), stage.GetEndTimeCode()) == (1001.0, 1084.0)
+
+    # The retry exactly as the on-failure binding suggests it: no arguments
+    # beyond what the binding itself can carry.
+    retried = import_timeline(str(stage_file), otio_file=str(otio_file))
+
+    assert retried["start_time_code"] == 1.0
+    assert retried["end_time_code"] == 84.0
+    stage = Usd.Stage.Open(str(stage_file))
+    assert (stage.GetStartTimeCode(), stage.GetEndTimeCode()) == (1.0, 84.0)
+
+
+@needs_pxr_and_otio
+def test_retrying_with_the_anchor_restores_the_pipeline_base(tmp_path):
+    """Re-supplying `start_time_code` on the retry keeps the 1001 base.
+
+    The repair path for the reset above: the retry is safe as long as the
+    caller passes the anchor again.
+    """
+    from pxr import Usd  # type: ignore
+
+    otio_file = _write_otio(_build_reference_timeline(), tmp_path / "shot.otio")
+    stage_file = tmp_path / "scene.usda"
+    create_stage(str(stage_file), name="shot_001")
+
+    import_timeline(str(stage_file), otio_file=str(otio_file), start_time_code=1001.0)
+    import_timeline(str(stage_file), otio_file=str(otio_file))  # resets to 1..84
+
+    repaired = import_timeline(str(stage_file), otio_file=str(otio_file), start_time_code=1001.0)
+
+    assert repaired["start_time_code"] == 1001.0
+    assert repaired["end_time_code"] == 1084.0
+    stage = Usd.Stage.Open(str(stage_file))
+    assert (stage.GetStartTimeCode(), stage.GetEndTimeCode()) == (1001.0, 1084.0)
+
+    # And the repaired, anchored stage still verifies cleanly.
+    assert verify_timeline_parity(str(stage_file), otio_file=str(otio_file), start_time_code=1001.0)["parity"] is True
+
+
+def test_on_failure_binding_declares_the_base_reset(tmp_path):
+    """The tools.yaml on-failure binding must warn about the reset it causes.
+
+    next-tools carries tool names only, so the warning has to live next to the
+    binding. This runs without pxr/opentimelineio: it only reads the YAML.
+    """
+    yaml_path = (
+        Path(__file__).resolve().parents[1] / "src" / "dcc_mcp_openusd" / "skills" / "openusd-timeline" / "tools.yaml"
+    )
+    text = yaml_path.read_text(encoding="utf-8")
+
+    assert "on-failure" in text
+    # The suggested retry is named, and the base reset is declared beside it.
+    assert "openusd_timeline__import_timeline" in text
+    assert "Resets the time code base" in text
+    assert "1-based range" in text
