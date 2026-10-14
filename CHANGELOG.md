@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.11.1](https://github.com/dcc-mcp/dcc-mcp-openusd/compare/v0.11.0...v0.11.1) (2026-10-13)
+
+
+### Bug Fixes
+
+* initialize optional OTIO before serving gateway calls ([762d34f](https://github.com/dcc-mcp/dcc-mcp-openusd/commit/762d34f157a460f2ac67b3cc59421d288596e84c))
+* validate native volume and instancer dependencies ([bf1085a](https://github.com/dcc-mcp/dcc-mcp-openusd/commit/bf1085ac9d2c58cc632506bcad2ec7586ba8f3b6))
+
+
+### Documentation
+
+* scope Blender USD consumer handoff workarounds ([#77](https://github.com/dcc-mcp/dcc-mcp-openusd/issues/77)) ([c574838](https://github.com/dcc-mcp/dcc-mcp-openusd/commit/c5748388138db3267c0ff6528d0a51d0644090e5))
+* showcase real USD greenhouse renders on the README ([#75](https://github.com/dcc-mcp/dcc-mcp-openusd/issues/75)) ([814e421](https://github.com/dcc-mcp/dcc-mcp-openusd/commit/814e4219fe4f2f9758c5417c21f0468d129e741e))
+* **timeline:** warn that the on-failure retry drops start_time_code ([#76](https://github.com/dcc-mcp/dcc-mcp-openusd/issues/76)) ([17cf0d6](https://github.com/dcc-mcp/dcc-mcp-openusd/commit/17cf0d63446e5d224a03be63f181297dcee04d47))
+
 ## [0.11.0](https://github.com/dcc-mcp/dcc-mcp-openusd/compare/v0.10.0...v0.11.0) (2026-10-12)
 
 
