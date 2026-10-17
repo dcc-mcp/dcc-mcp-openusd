@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.11.2](https://github.com/dcc-mcp/dcc-mcp-openusd/compare/v0.11.1...v0.11.2) (2026-10-17)
+
+
+### Bug Fixes
+
+* convert JSON attribute vectors and preserve native USD conversions ([#78](https://github.com/dcc-mcp/dcc-mcp-openusd/issues/78)) ([e237412](https://github.com/dcc-mcp/dcc-mcp-openusd/commit/e2374126b47840aace666f1ed3b5701c722c5012))
+* validate native binary layer metadata ([#80](https://github.com/dcc-mcp/dcc-mcp-openusd/issues/80)) ([7f47a31](https://github.com/dcc-mcp/dcc-mcp-openusd/commit/7f47a3198b83cd737944c2b0d844fb473c6f56b1))
+
 ## [0.11.1](https://github.com/dcc-mcp/dcc-mcp-openusd/compare/v0.11.0...v0.11.1) (2026-10-13)
 
 
