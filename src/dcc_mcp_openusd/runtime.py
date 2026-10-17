@@ -3247,6 +3247,40 @@ def author_xform_samples(
     }
 
 
+def _attribute_sample_value(attribute: Any, value: Any) -> Any:
+    """Convert JSON vectors to the attribute's native Gf vector type.
+
+    Array attributes already accept nested JSON lists through the USD bindings.
+    Scalar vectors need an explicit Gf value, including role aliases such as
+    color3f and texCoord2d. Do not guess types for custom attributes.
+    """
+    value_type = attribute.GetTypeName()
+    native_type = value_type.type.pythonClass
+    if value_type.isArray or native_type is None or not re.fullmatch(r"Vec[234][hfid]", native_type.__name__):
+        return value
+    # Native inputs retain USD's conversion policy (including cross-precision
+    # Gf vectors). Only JSON-style sequences need this explicit conversion.
+    if not isinstance(value, (list, tuple)):
+        return value
+    dimension = native_type.dimension
+    label = f"{attribute.GetName()} ({value_type})"
+    if len(value) != dimension:
+        raise OpenUsdError(f"{label} sample must contain exactly {dimension} numeric components")
+    integer_vector = native_type.__name__.endswith("i")
+    for component in value:
+        if isinstance(component, bool) or not isinstance(component, (int, float)) or not math.isfinite(component):
+            raise OpenUsdError(f"{label} sample components must be finite numbers, not booleans")
+        if integer_vector and not isinstance(component, int):
+            raise OpenUsdError(f"{label} sample components must be integers")
+    try:
+        converted = native_type(*value)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise OpenUsdError(f"{label} sample components are outside the supported numeric range") from exc
+    if any(not math.isfinite(component) for component in converted):
+        raise OpenUsdError(f"{label} sample components are outside the supported numeric range")
+    return converted
+
+
 def author_attribute_samples(
     stage_file: str,
     prim_path: str,
@@ -3276,9 +3310,10 @@ def author_attribute_samples(
     if not attr:
         attr = prim.CreateAttribute(attribute_name, Sdf.ValueTypeNames.Float)
 
-    for entry in samples:
-        t = float(entry["time"])
-        attr.Set(entry["value"], t)
+    # Validate and convert JSON vectors in the batch before authoring samples.
+    prepared = [(float(entry["time"]), _attribute_sample_value(attr, entry["value"])) for entry in samples]
+    for t, value in prepared:
+        attr.Set(value, t)
 
     stage.GetRootLayer().Save()
     return {
