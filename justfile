@@ -40,3 +40,8 @@ clean:
 
 preflight: lint lint-format lint-skills test check-dist
     @echo "preflight passed"
+
+
+# Verify the pinned VX and just toolchain.
+toolchain-ci:
+    vx just@1.58 --version
